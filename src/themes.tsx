@@ -72,6 +72,16 @@ export function ThemePicker({ theme, anime, character, muted, select, selectChar
     dialog.current?.showModal();
   }
 
+  function chooseTheme(next: 'minimal' | 'cute') {
+    select(next);
+    dialog.current?.close();
+  }
+
+  function chooseCharacter(id: Anime, person: Character) {
+    selectCharacter(id, person);
+    dialog.current?.close();
+  }
+
   return <>
     <button className="secondary theme-trigger" type="button" onClick={open}>
       <span>Theme</span><span className="theme-current">{themes[theme].name}</span>
@@ -84,11 +94,11 @@ export function ThemePicker({ theme, anime, character, muted, select, selectChar
           <form method="dialog"><button className="icon-btn" aria-label="Close themes">×</button></form>
         </div>
         <div className="theme-options">
-          <ThemeCard preview="minimal" name="Minimal" active={theme === 'minimal'} onClick={() => { setShowAnime(false); select('minimal'); }}/>
+          <ThemeCard preview="minimal" name="Minimal" active={theme === 'minimal'} onClick={() => chooseTheme('minimal')}/>
           <ThemeCard preview="anime-jjk" name="Anime Coded" expanded={showAnime} onClick={() => setShowAnime(true)}/>
-          <ThemeCard preview="cute" name="Cute" active={theme === 'cute'} onClick={() => { setShowAnime(false); select('cute'); }}/>
+          <ThemeCard preview="cute" name="Cute" active={theme === 'cute'} onClick={() => chooseTheme('cute')}/>
         </div>
-        {showAnime && <AnimeThemeSelector active={anime} character={character} select={select} selectCharacter={selectCharacter}/>}
+        {showAnime && <AnimeThemeSelector active={anime} character={character} select={select} selectCharacter={chooseCharacter}/>}
         <label className="theme-mute"><input type="checkbox" checked={muted} onChange={event => mute(event.target.checked)}/> Mute theme sounds</label>
       </div>
     </dialog>
