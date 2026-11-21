@@ -4,7 +4,7 @@ import backend from './server/vite-api.mjs';
 export default defineConfig({
   plugins:[tailwind(),backend()],
   worker:{format:'es'},
-  optimizeDeps:{include:['pdfjs-dist','tesseract.js']},
+  optimizeDeps:{include:['pdfjs-dist','tesseract.js','docx','jspdf','jszip']},
   build:{rollupOptions:{output:{assetFileNames(asset){
     return asset.names.includes('eng.traineddata.gz')?'assets/ocr/eng.traineddata.gz':'assets/[name]-[hash][extname]';
   }}}}

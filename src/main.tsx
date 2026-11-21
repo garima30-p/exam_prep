@@ -10,11 +10,12 @@ import { documentComplete } from './document-state';
 import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
 import { StudyCharacter, ThemeHero, ThemePicker, useTheme } from './themes';
+import { answerLines, buildStudyPack, familiarityLabels, sourceLabel } from './study-pack';
+import { DownloadStudyPack, StudyOutput } from './study-output';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
-const familiarityLabels={unknown:'Unspecified',scratch:'Starting from scratch',familiar:'Somewhat familiar',revising:'Mostly revising'};
 const preparationLabels={completed:'Checkpoints completed',revision:'Needs revision','in-progress':'In progress','not-started':'Not started'};
 type Page = 'pricing'|'privacy'|'terms';
 type Message = {role:'You'|'Demo coach'|'Study coach'; text:string; source?:Source};
@@ -57,6 +58,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const timeAnchor=useRef(Date.now());
   const [messages,setMessages]=useState<Message[]>([]);
   const [chat,setChat]=useState('');
+  const [generatedCoach,setGeneratedCoach]=useState(false);
+  const [coachPending,setCoachPending]=useState(false);
+  const lastCoachQuestion=useRef<Question | undefined>(undefined);
   const [limit,setLimit]=useState(10);
   const [page,setPage]=useState<Page|null>(null);
   const [source,setSource]=useState<Source|null>(null);
@@ -118,9 +122,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const analysis=await activeApi.analyze(adjusted, files, prompt,{documents:records,signal:run.signal,
         onPlanning:()=>setProcessingMessage('Matching equivalent questions and building your plan…')});
       run.signal.throwIfAborted();
-      setResult(analysis.questions);setWarnings(analysis.warnings);
+      setResult(analysis.questions);setWarnings(analysis.warnings);setGeneratedCoach(Boolean(analysis.generatedCoach));
       setOptimization(analysis.optimization?{data:analysis.optimization,context:adjusted}:null);
-      setProgress({});restartBudget();setLimit(10);setMessages([]);setPlanGenerated(true); }
+      setProgress({});restartBudget();setLimit(10);setMessages([]);lastCoachQuestion.current=undefined;setPlanGenerated(true); }
     catch(error) { setNotice(run.signal.aborted?'Processing cancelled. Run again to resume from usable pages.':error instanceof Error?error.message:'The study plan could not load. Try again.'); }
     finally {controller.current=null;setProcessingMessage('');setBusy(false);}
   }
@@ -140,12 +144,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const tracked=optimization?.data.candidates.filter(question=>!plannedIds.has(question.id)&&progress[question.id])??[];
   const coveredUnits=[...new Set(visible.map(question=>question.unit).filter(Boolean))].sort((a,b)=>a-b);
   const missingUnits=[...new Set(result?.map(question=>question.unit).filter(unit=>unit&&!coveredUnits.includes(unit)))].sort((a,b)=>a-b);
+  const coverageMessage = missingUnits.length ? 'Units outside the current shortlist: '+missingUnits.join(', ')+'.' : '';
+  const pack = buildStudyPack(context,remainingTime,plan,fitted,visible,optimization?.data.candidates??result??[],
+    sampleMode,[...warnings,...(plan?.warnings??[]),coverageMessage].filter(Boolean));
   function send(text:string, target?:Question, marks?:number) {
     if(!text.trim())return;
     const minutes=duration(text);
     const familiarity=familiarityFrom(text);
     let reply:string;
-    if(minutes && /left|replan|only|have/i.test(text)) {
+    let answerSource:Source|null|undefined;
+    let generateFor:Question|undefined;
+    if(minutes && /\b(left|remaining|replan|have|time to study|can study)\b/i.test(text)) {
       update('minutes',minutes);setLimit(10);
       if(familiarity!=='unknown')update('familiarity',familiarity);
       reply='Updated the plan for '+minutes+' minutes, including time for recall.';
@@ -159,15 +168,50 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       reply=limit<fitted.length?'I added the next questions below.':'The current materials and study budget support '+fitted.length+' questions.';
     } else {
       const ranked=visible.map((question,index)=>({...question,id:index+1}));
-      reply=activeApi.chat(text,target?[{...target,id:visible.indexOf(target)+1}]:ranked);
+      const numbered = text.match(/(?:#|question\s+)(\d+)/i);
+      const words = text.toLowerCase().match(/[a-z]{3,}/g)??[];
+      const generic = new Set(['give','show','answer','suitable','marks','example','explain','simpler','english','what','about','this','that','minutes','minute']);
+      const meaningful = words.filter(word=>!generic.has(word));
+      const relevant = (result??[]).map(question=>({question, hits:meaningful.filter(word=>
+        (question.topic+' '+question.prompt).toLowerCase().match(/[a-z]{3,}/g)?.includes(word)).length}))
+        .filter(item=>item.hits>0).sort((a,b)=>b.hits-a.hits)[0]?.question;
+      const asksForContent=/\b(answer|explain|simpler|example|marks?|define)\b/i.test(text);
+      const selected=target??(numbered?visible[Number(numbered[1])-1]:relevant??(meaningful.length===0?lastCoachQuestion.current:undefined));
+      if(selected)lastCoachQuestion.current=selected;
+      if(asksForContent&&!sampleMode) {
+        answerSource=selected?.answerSource;
+        const excerpt=answerSource?.excerpt;
+        if(!selected)reply='Name a topic from your materials or select a question to work on.';
+        else if(!excerpt)reply='Your materials contain this question but no matching explanation. Add class notes or a solved answer to get a source-backed response.';
+        else if(/\bexample\b/i.test(text)&&!/\b(example|suppose|consider|for instance)\b/i.test(excerpt))
+          reply='The supporting passage does not contain a worked example. Here is the related evidence:\n'+answerLines(selected,false,15).join(' ');
+        else {
+          const focused=/\b(two minutes|2 min|simpler|brief)\b/i.test(text)?15:45;
+          reply='From your materials · '+selected.topic+'\n'+answerLines(selected,false,focused).join('\n')+
+            (/\bmarks?\b/i.test(text)?'\nUse these points to structure your answer. The material does not establish a marking rubric.':'');
+        }
+        if(generatedCoach&&selected&&(!excerpt||/\b(example|simpler)\b/i.test(text))&&!coachPending) generateFor=selected;
+      } else reply=activeApi.chat(text,target?[{...target,id:visible.indexOf(target)+1}]:ranked);
       if(target && marks && sampleMode) {
         const sentences=target.answer.match(/[^.!?]+[.!?]*/g) ?? [target.answer];
         reply='Sample '+marks+'-mark outline · '+target.topic+'\n'+(marks===2?sentences.slice(0,2).join('').trim():target.answer);
         if(marks===10) reply+='\nFor a longer response, define the terms and develop a worked example.';
       }
     }
-    const answerSource=/answer|explain|mark/i.test(text)?target?.answerSource:null;
-    setMessages(current=>[...current,{role:'You',text},{role:sampleMode?'Demo coach':'Study coach',text:reply,source:answerSource??undefined}]);setChat('');
+    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:generateFor?'Preparing an explanation…':reply,source:answerSource??undefined};
+    setMessages(current=>[...current,{role:'You',text},message]);setChat('');
+    if(generateFor){
+      setCoachPending(true);
+      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(15000),
+        body:JSON.stringify({subject:context.subject,question:generateFor.prompt,request:text,evidence:generateFor.answerSource?.excerpt})})
+        .then(async response=>{
+          const data=await response.json() as {explanation?:string;error?:string};
+          if(!response.ok||!data.explanation)throw new Error(data.error||'Generated explanation unavailable.');
+          return 'Generated explanation · verify against your materials\n'+data.explanation;
+        }).catch(error=>reply+'\n'+(error instanceof Error&&error.name==='Error'?error.message:'Generated explanation unavailable.'))
+        .then(text=>setMessages(current=>current.map(item=>item===message?{...item,text}:item)))
+        .finally(()=>setCoachPending(false));
+    }
   }
   function open(next:Page|null, reference:Source|null=null){setPage(next);setSource(reference);dialog.current?.showModal();}
   function reset(){setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNotice('');setTimeReply('');setPlanGenerated(false);}
@@ -193,6 +237,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     return <article className="question" key={q.id}>
       <div className="question-meta">{index!==undefined&&<span className="rank">#{index+1}</span>}<span>{q.topic}{q.unit?' · Unit '+q.unit:''}</span><span className="spacer"/><span>{effort?.minutes??q.minutes} min{q.marks?' · '+q.marks+' marks':''}</span></div>
       <h3>{q.prompt}</h3><p>{q.reason}.</p>
+      {!sampleMode&&q.answerSource&&<details className="checkpoints"><summary>Source-backed answer</summary>
+        {answerLines(q,false,remainingTime).map((text,index)=><p key={index}>{text}</p>)}
+        <button className="link accent" onClick={()=>open(null,q.answerSource!)}>{sourceLabel(q.answerSource)}</button>
+      </details>}
+      {!sampleMode&&!q.answerSource&&<p>No supporting answer passage is available.</p>}
       {(q.sources??[q.source]).map((reference,i)=><button key={i} className="link accent source" onClick={()=>open(null,reference)}><Icon name="file"/>{reference.file} · {reference.file==='Pasted text'?reference.number:'p. '+reference.page+' · '+reference.number}</button>)}
       {effort&&q.learning&&<details className="checkpoints">
         <summary>{q.learning.type} · {preparationLabels[effort.status]} · {effort.completed}/{effort.total} checkpoints</summary>
@@ -222,7 +271,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
       <ThemePicker {...theme}/>
     </div></header>
-    <main id="main" className={'wrap '+(result?'workspace':'landing')}>
+    <main id="main" className={'wrap '+(planGenerated?'workspace':'landing')}>
       <ThemeHero {...theme}/>
       <section aria-label="Exam setup" className="setup">
         <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
@@ -259,22 +308,25 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             : <button className="primary" type="button" onClick={()=>void generate(undefined,context,'continue')}>Build verified plan</button>}
         </div>}
       </section>
-      {result && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" tabIndex={-1}>{sampleMode?'Sample study plan':'Study plan'}</h2></div><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div>
-        <div className="summary"><span>Exam: {context.subject||'Unspecified'}</span><span>{plan?.totalAvailableMinutes??context.minutes} min remaining</span><span>{files.length} PDFs attached</span><span>{sampleMode?'Evidence: demo fixtures':result.some(q=>q.reason.startsWith('Found in'))?'Evidence: uploaded past papers':'Evidence: supplied text'}</span></div>
-        {warnings.length>0&&<ul className="notice" aria-label="Extraction warnings">{warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>}
-        {plan&&<p className="notice">Full plan · {plan.estimatedPreparationMinutes} of {plan.preparationBudgetMinutes} preparation minutes · {plan.revisionMinutes} min reserved for revision · {plan.coveredTopicIds.length} identified topics covered</p>}
-        {plan&&plan.warnings.length>0&&<ul className="notice" aria-label="Preparation warnings">{plan.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>}
-        <div className="result-grid"><div>
+      {result && planGenerated && <section className="results" aria-labelledby="results-title">
+        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" tabIndex={-1}>{sampleMode?'Sample study plan':'Study plan'}</h2></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
+        <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
+        <StudyOutput pack={pack} openSource={reference=>open(null,reference)} ask={question=>{
+          send('Explain '+question.topic,question);
+          document.getElementById('study-coach-title')?.scrollIntoView?.({block:'nearest'});
+        }}/>
+        <div className="result-grid"><section aria-labelledby="important-questions">
+          <h3 id="important-questions">Important Questions</h3>
+          {!visible.length&&<p className="notice">No complete question fits this plan.</p>}
           {visible.map((question,index)=>renderQuestion(question,index))}
-          <div className="coverage"><h3>Coverage gaps</h3>
-            {!result.length?<p>No usable questions were identified. Try a text-selectable past paper or paste the question lines directly.</p>:!visible.length?<p>{plan?.preparedQuestionIds.length===result.length?'All candidate checkpoints are marked completed. Revisit a question below whenever needed.':'No additional question fits the remaining preparation budget.'}</p>:<p>{coveredUnits.length?'Identified units: '+coveredUnits.join(', ')+'. ':''}Check compulsory sections and passing-mark coverage against your paper.</p>}
-            {missingUnits.length>0&&<p>Units in the material missing from this shortlist: {missingUnits.join(', ')}.</p>}
-            {visible.length<10&&fitted.length<result.length&&<p>Allow more study time to include additional topics.</p>}
-          </div>
           {limit<fitted.length && <button className="secondary" onClick={()=>send('Show next 10')}>Show next 10</button>}
           {tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
-        </div><aside className="coach" aria-label="Contextual chat"><h3><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3><div className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:messages.map((m,i)=><div key={i}><strong>{m.role}</strong><p>{m.text}</p>{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div><form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()}><Icon name="send"/></button></form></aside></div>
+        </section><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3><div className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:messages.map((m,i)=><div key={i}><strong>{m.role}</strong><p>{m.text}</p>{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div><form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()}><Icon name="send"/></button></form></aside></div>
+          <div className="coverage"><h3>Sources and Coverage</h3>
+            {!result.length?<p>No usable questions were identified. Try a text-selectable past paper or paste the question lines directly.</p>:!visible.length?<p>{plan?.preparedQuestionIds.length===result.length?'All candidate checkpoints are marked completed. Revisit a question below whenever needed.':'No additional question fits the remaining preparation budget.'}</p>:<p>{coveredUnits.length?'Identified units: '+coveredUnits.join(', ')+'. ':''}Check compulsory sections and passing-mark coverage against your paper.</p>}
+            {missingUnits.length>0&&<p>Units in the material missing from this shortlist: {missingUnits.join(', ')}.</p>}
+            {pack.warnings.length>0&&<ul className="notice">{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>}
+          </div>
       </section>}
     </main>
     <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>

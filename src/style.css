@@ -258,3 +258,18 @@ dialog::backdrop{background:var(--backdrop)}
   .character-portrait,.study-character .character-image{animation:none}
   .desk-prop,.desk-prop span{animation:none!important;transition:none!important}
 }
+.study-actions{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.download{position:relative}
+.download-menu{position:absolute;z-index:2;right:0;top:calc(100% + .35rem);width:min(17rem,85vw);display:grid;gap:.55rem;padding:.7rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 6px 20px #0002}
+.download-menu div{display:flex;gap:.35rem;flex-wrap:wrap}
+.study-output{margin:1rem 0}
+.study-note{margin:.65rem 0;padding:1rem;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+.study-note h4{font-weight:750}
+.study-note h4 small{color:var(--muted);font-weight:500;margin-inline-start:.35rem}
+.study-note ul{list-style:disc;padding-inline-start:1.2rem;margin:.45rem 0}
+.study-note li{margin:.15rem 0}
+.study-timeline{margin:.45rem 0}
+.study-timeline li{display:flex;justify-content:space-between;gap:.65rem;align-items:start;padding:.35rem 0;border-bottom:1px solid var(--line)}
+.study-timeline strong{white-space:nowrap}
+.results .coverage:last-child{margin-top:.8rem}
+@media(max-width:720px){.result-top{flex-wrap:wrap}.result-grid .coach{order:0}.download-menu{left:0;right:auto}}

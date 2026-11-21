@@ -36,7 +36,10 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(host.querySelector('[role=log]')?.textContent).toContain('page 1, Q1');
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('[aria-label="Ask about your plan"]')!,'Only 30 minutes left'));
     await act(async()=>host.querySelector('.coach form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    expect(host.querySelectorAll('.question')).toHaveLength(1);
+    expect(host.querySelector('.summary')?.textContent).toContain('30 min available');
+    expect(host.querySelectorAll('.question').length).toBeGreaterThan(0);
+    const allocations=[...host.querySelectorAll('.study-timeline strong')].map(item=>parseInt(item.textContent??'0',10));
+    expect(allocations.reduce((sum,item)=>sum+item,0)).toBeLessThanOrEqual(30);
     expect(host.querySelector('a[href="#results-title"]')).not.toBeNull();
     await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. I have two hours.'));
     expect(host.querySelector('a[href="#results-title"]')).toBeNull();

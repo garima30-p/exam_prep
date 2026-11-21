@@ -64,3 +64,7 @@ npm run evaluate -- server/fixtures/synthetic-history.json NEO-V3-EVALUATION.jso
 
 The command uses the bundled model by default. Use `--exact` to exercise fallback, or `--cache=PATH` to use a separate Transformers.js disk cache with the pinned upstream model. See [NEO-V3.md](NEO-V3.md) for the evaluation protocol, fixture results, and instructions for adding real papers.
 
+### Optional generated explanations
+
+The default deployment uses extractive study notes and does not call a cloud model. To enable generated coach explanations on a Workers Free account, configure the Workers AI binding as `AI`, configure a Worker rate-limiting binding as `STUDY_AI_LIMIT` (for example, 3 requests per minute), and set `STUDY_AI_ENABLED=true`. The API requires all three. Keep the account on the Free plan to enforce the provider's daily allocation. The coach bounds request and response lengths, and it falls back to the source passage when generation fails. Exports use the already generated study pack.
+

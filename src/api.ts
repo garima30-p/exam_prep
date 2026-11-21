@@ -5,7 +5,7 @@ import type { ExtractedDocument, PrepareOptions } from './document-state';
 export type Context = {subject:string; date:string; minutes:number; pass:string; pattern:string; familiarity:Familiarity};
 export type Material = {id:number; file:File; kind:string};
 export type Source = {id?:string; file:string; page:number; number:string; excerpt:string; documentIndex?:number;method?:'pdf-text'|'ocr'|'manual'};
-export type Question = {id:number; topic:string; unit:number; prompt:string; minutes:number; marks:number; reason:string; source:Source; sources?:Source[]; answerSource?:Source|null; answer:string;learning?:LearningProfile};
+export type Question = {id:number; topic:string; unit:number; prompt:string; minutes:number; marks:number; reason:string; source:Source; sources?:Source[]; answerSource?:Source|null; answer:string;learning?:LearningProfile;historicalFrequency?:number;historicalPaperCount?:number};
 export type RankedQuestion = Question & LearningCandidate & {
   historicalFrequency:number;
   historicalPaperCount:number;
@@ -14,7 +14,7 @@ export type RankedQuestion = Question & LearningCandidate & {
   examYears:number[];
   scoreComponents:Record<string,number|null>;
 };
-export type Analysis = {questions:readonly Question[];warnings:string[]; optimization?:{
+export type Analysis = {questions:readonly Question[];warnings:string[];generatedCoach?:boolean; optimization?:{
   candidates:readonly RankedQuestion[];
   topics:readonly SyllabusTopic[];
   plan:LearningPlan;
@@ -27,9 +27,21 @@ export interface ExamApi {
 }
 
 export function duration(value:string) {
-  const matches = [...value.matchAll(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|days?|d)\b/gi)];
-  const minutes = matches.reduce((sum, [, amount, unit]) => sum + Number(amount) * ({h:60,d:1440,m:1}[unit[0].toLowerCase()] ?? 1),0);
-  return Number.isSafeInteger(Math.round(minutes)) ? Math.round(minutes) : 0;
+  const small = ['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];
+  const tens = ['twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'];
+  const words = new RegExp('\\b(' + tens.join('|') + ')(?:[- ](' + small.slice(1,10).join('|') + '))?\\b|\\b(' + small.join('|') + ')\\b', 'g');
+  const normalized = value.toLowerCase().replace(words, (_, ten, unit, simple) =>
+    String(ten ? (tens.indexOf(ten)+2)*10 + (unit ? small.indexOf(unit) : 0) : small.indexOf(simple)))
+    .replace(/\b(?:an?|one)\s+hour\b/g, '1 hour');
+  const explicit = /\b(?:have|can study for|time to study is|study for|only|replan for)\s+(?:just\s+|only\s+)?(?=\d)/g;
+  const budgets = [...normalized.matchAll(explicit)];
+  const input = budgets.length ? normalized.slice(budgets.at(-1)!.index! + budgets.at(-1)![0].length)
+    : normalized.replace(/\b(?:exam|test|paper)\b[^.!?,;\n]*?\b(?:in|after|starts? in)\s+(?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|days?|d)\b\s*(?:and\s*)?)+/gi,'');
+  const expression = input.match(/^\s*(?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|days?|d)(?![a-z])\s*(?:and\s*)?)+/)?.[0]
+    ?? (!budgets.length ? input.match(/\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|days?|d)\b(?=\s+left\b)/)?.[0] : undefined);
+  const matches = expression?.matchAll(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|days?|d)/g) ?? [];
+  const minutes = [...matches].reduce((sum, [, amount, unit]) => sum + Number(amount) * ({h:60,d:1440,m:1}[unit[0]] ?? 1),0);
+  return Number.isSafeInteger(Math.round(minutes)) ? Math.min(525600,Math.round(minutes)) : 0;
 }
 
 export function materialType(filename:string) {

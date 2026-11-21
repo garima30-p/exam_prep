@@ -1,9 +1,9 @@
 import { makePlan } from './optimizer.mjs';
 
 const profiles={
-  definition:{minutes:[7,4,4],steps:['State the definition in one or two sentences.','Distinguish the term from a closely related term.','Recall the definition and an example without notes.']},
-  explanation:{minutes:[10,6,4],steps:['State the central idea in your own words.','Explain the key steps or relationships in order.','Work through an example if the question calls for one.','Reproduce the explanation without notes.']},
-  comparison:{minutes:[10,8,5],steps:['Define the items being compared.','Choose consistent criteria and compare both items against each criterion.','Reconstruct the comparison from memory.']},
+  definition:{minutes:[4,2,2],steps:['State the definition in one or two sentences.','Distinguish the term from a closely related term.','Recall the definition and an example without notes.']},
+  explanation:{minutes:[6,4,3],steps:['State the central idea in your own words.','Explain the key steps or relationships in order.','Work through an example if the question calls for one.','Reproduce the explanation without notes.']},
+  comparison:{minutes:[6,5,3],steps:['Define the items being compared.','Choose consistent criteria and compare both items against each criterion.','Reconstruct the comparison from memory.']},
   numerical:{minutes:[12,13,5],steps:['Identify the givens, unknowns and applicable method.','Recall the relevant formula or algorithm and when it applies.','Work a representative calculation without following a solved example.','Check units, assumptions and the result.']},
   derivation:{minutes:[14,12,6],steps:['Identify the starting assumptions and target result.','Reproduce the derivation step by step and justify each transition.','Redo the derivation from memory and check the final expression.']},
   diagram:{minutes:[9,10,5],steps:['Identify the components and their relationships.','Draw and label the diagram without copying.','Check that the labels and connections explain the requested process.']},

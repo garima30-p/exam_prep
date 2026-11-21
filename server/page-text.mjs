@@ -4,6 +4,8 @@ const HEADER=/^(?:section|unit|part)\s+[a-z\d]+\s*(?:[-:.(]|$)/i;
 const GROUP=/^q(?:uestion)?\s*\.?\s*\d{1,2}\s*[.:)]?\s*(?:\s*\(?[\d x×=]+\s+marks?\)?)?$/i;
 export const readQuestionCue=(line,pastPaper=false)=>{
   if(GROUP.test(line))return null;
+  const solved=line.match(/^(Q\s*\d{1,3})\s+\[P\d[^\]]*\]\s+(.{12,})$/i);
+  if(solved)return {number:solved[1].replace(/\s+/g,''),text:solved[2]};
   const command=line.match(QUESTION);
   const numbered=!command&&pastPaper?line.match(NUMBERED):null;
   const number=(command?.[1]??command?.[2]??numbered?.[1])?.replace(/\s+/g,'');

@@ -31,7 +31,7 @@ export const liveApi:ExamApi = {
       pages:[{number:1,text:prompt,method:'manual',status:'verified'}]});
     const response=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
       signal:options?.signal,body:JSON.stringify({materials,minutes:context.minutes,pattern:context.pattern,familiarity:context.familiarity})});
-    const data=await response.json() as {questions?:RankedQuestion[];topics?:SyllabusTopic[];plan?:LearningPlan;error?:string};
+    const data=await response.json() as {questions?:RankedQuestion[];topics?:SyllabusTopic[];plan?:LearningPlan;generatedCoach?:boolean;error?:string};
     if(!response.ok||!data.questions||!data.topics||!data.plan) throw new Error(data.error||'Analysis service unavailable.');
     options?.onPlanning?.();
     const prompts=data.questions.slice(0,EMBEDDING_LIMIT).map(question=>question.prompt);
@@ -40,7 +40,7 @@ export const liveApi:ExamApi = {
     if(prompts.length>1&&!vectors)warnings.push('Semantic matching was unavailable. Exact question matching was used.');
     const {questions,topics,mode}=groupQuestions(data.questions,data.topics,vectors,false);
     const plan=mode==='semantic'?makeLearningPlan(questions,topics,context.minutes,context.pattern,context.familiarity):data.plan;
-    return {questions,warnings,optimization:{candidates:questions,topics,plan}};
+    return {questions,warnings,generatedCoach:data.generatedCoach,optimization:{candidates:questions,topics,plan}};
   },
   chat(message,questions) {
     if (/\b(unit|coverage|gaps?)\b/i.test(message)) {
