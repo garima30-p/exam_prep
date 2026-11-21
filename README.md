@@ -30,7 +30,7 @@ See [DOCUMENT-PROCESSING.md](DOCUMENT-PROCESSING.md) for the three TCS502 compar
 - `POST /api/analyze` accepts classified materials with per-page text, available minutes, paper rules and familiarity. It returns evidence-bearing candidates, topic weights, estimates and a preparation plan.
 - The first ten recommendations appear immediately. **Show next 10** reveals additional selected questions. When the first ten lack coverage of a requirement represented in the full plan, the app flags that gap.
 - Expand a question’s checkpoints and record an attempt as incomplete, completed, or needing revision. Completed work and out-of-plan checkpoints remain accessible under **Revisit checkpoint progress**. On checkpoint or familiarity changes, the planner samples elapsed session time and subtracts whole minutes from the last stated budget. Giving a new time in chat starts a fresh budget. “I’m mostly revising” changes effort estimates and preserves checkpoint progress. A new analysis or reload starts a new checkpoint session.
-- `wrangler.jsonc` targets the existing `exam-prep` Cloudflare Worker. Wrangler serves `dist/` as static assets and routes `/api/*` to `server/worker.mjs`. The Pages Functions adapter remains available for Pages deployments.
+- `wrangler.jsonc` targets the `app` Cloudflare Worker at [app.in-nocent.workers.dev](https://app.in-nocent.workers.dev/). Wrangler serves `dist/` as static assets and routes `/api/*` to `server/worker.mjs`. The Pages Functions adapter remains available for Pages deployments.
 
 ### Cloudflare Workers Builds
 
