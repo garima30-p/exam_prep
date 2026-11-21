@@ -27,7 +27,8 @@ function materialLines(text, kind) {
     if(!solvedHeading.test(compact(lines[index])))continue;
     for(let next=index+1;next<=index+3&&next<lines.length&&!/[.?!]\s*$/.test(lines[index]);next++){
       const continuation=compact(lines[next]);
-      if(!continuation||solvedHeading.test(continuation)||boilerplate.test(continuation))break;
+      if(!continuation)continue;
+      if(solvedHeading.test(continuation)||boilerplate.test(continuation))break;
       lines[index]=compact(lines[index])+' '+continuation;
       lines[next]='';
     }

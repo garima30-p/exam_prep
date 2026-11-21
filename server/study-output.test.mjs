@@ -10,6 +10,7 @@ it('joins wrapped solved questions and cites the answer without counting it as p
     'How to use. Study the priority sections first.',
     'UNIT 2 · Processes',
     'Q01 [P0 · D25 Q1(a)] Define deadlock and explain the',
+    '',
     'four necessary conditions.',
     'Deadlock occurs when processes are blocked while waiting for resources held by one another.',
     'The four conditions are mutual exclusion, hold and wait, no preemption, and circular wait.',
