@@ -18,19 +18,37 @@ const preparationLabels={completed:'Checkpoints completed',revision:'Needs revis
 type Page = 'pricing'|'privacy'|'terms';
 type Message = {role:'You'|'Demo coach'|'Study coach'; text:string; source?:Source};
 
-function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'clock'|'close'}) {
+const themes = {simple:'Simple', anime:'JJK-inspired', soft:'Thai GL-inspired'} as const;
+type Theme = keyof typeof themes;
+const themeKey = 'in-nocent-theme';
+
+function savedTheme(): Theme {
+  try {
+    const value = localStorage.getItem(themeKey);
+    if (value === 'anime' || value === 'soft') return value;
+  } catch { /* Storage may be unavailable. */ }
+  return 'simple';
+}
+
+function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
   const paths = {
     clip:'M21 11.5l-8.7 8.7a5 5 0 01-7.1-7.1l9.4-9.4a3.5 3.5 0 015 5l-9.4 9.4a2 2 0 01-2.8-2.8l8.7-8.7',
     send:'M3 11.5l18-8-7.5 18-3.2-7-7.3-3z M10.3 14.5L21 3.5',
     spark:'M12 2l2.3 7.7L22 12l-7.7 2.3L12 22l-2.3-7.7L2 12l7.7-2.3z',
     file:'M6 3h8l4 4v14H6z M14 3v5h4 M9 12h6 M9 16h6',
-    clock:'M22 12a10 10 0 11-20 0 10 10 0 0120 0z M12 6v6l4 2',
     close:'M5 5l14 14M19 5L5 19'
   };
   return <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]}/></svg>;
 }
 
 export function App({api=demoApi}:{api?:ExamApi}) {
+  const [theme,setTheme]=useState(savedTheme);
+  useEffect(()=>{
+    document.documentElement.dataset.theme=theme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content',
+      getComputedStyle(document.documentElement).backgroundColor);
+    try { localStorage.setItem(themeKey,theme); } catch { /* Theme still applies for this session. */ }
+  },[theme]);
   const [exampleMode,setExampleMode]=useState(false);
   const activeApi=exampleMode?demoApi:api;
   const sampleMode=activeApi===demoApi;
@@ -195,7 +213,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         <summary>{q.learning.type} · {preparationLabels[effort.status]} · {effort.completed}/{effort.total} checkpoints</summary>
         <p>Remaining estimate: {effort.remaining.understanding} min understanding, {effort.remaining.practice} min practice, {effort.remaining.recall} min recall.</p>
         {q.learning.prerequisites.length>0&&<p>Syllabus prerequisites: {q.learning.prerequisites.join(', ')}.</p>}
-        <p>Mark a checkpoint completed after attempting it from memory or solving the problem. Revisit it any time.</p>
         <ol>
           {q.learning.checkpoints.map(checkpoint=><li key={checkpoint.id}>
             <label><span>{checkpoint.text}<small>{checkpoint.label}</small></span>
@@ -218,39 +235,38 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   return <>
     <header className="top"><div className="wrap header-inner">
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
-      <div className="head-actions"><span className="badge"><i/>{sampleMode?'Demo mode':'Study planner'}</span><button className="link" onClick={()=>open('pricing')}>Plans</button></div>
+      <label className="theme-picker"><span>Theme</span><select value={theme} onChange={event=>setTheme(event.target.value as Theme)}>
+        {Object.entries(themes).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+      </select></label>
     </div></header>
     <main id="main" className={'wrap '+(result?'workspace':'landing')}>
       <section className="hero">
-        <div className="eyebrow"><Icon name="spark"/> EXAM PREP, PRIORITIZED</div>
-        <h1>Study what <em>matters.</em></h1>
-        <p>Tell us what’s on the exam, how much time you have, and what you’re studying from.</p>
+        <h1>Exam <em>planner</em></h1>
       </section>
       <section aria-label="Exam setup" className="setup">
         <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
-          <label htmlFor="prompt">What exam are you preparing for?</label>
-          <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder={sample} rows={4} maxLength={8000}/>
+          <label htmlFor="prompt">Exam details</label>
+          <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="e.g. DBMS exam tomorrow, 5 hours to study" rows={3} maxLength={8000}/>
           {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept="application/pdf,.pdf" multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach PDFs</button>
             {planGenerated
               ? <a className="primary" href="#results-title">Plan generated<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v15m-6-6 6 6 6-6"/></svg></a>
-              : <button className="primary" disabled={busy} type="submit"><Icon name="spark"/>{busy?'Preparing plan…':'Build my plan'}</button>}
+              : <button className="primary" disabled={busy} type="submit">{busy?'Preparing plan…':'Generate plan'}</button>}
           </div>
         </form>
         {notice && <p role="alert" className="notice">{notice}</p>}
-        {hasContext && <fieldset className="context" disabled={busy}><legend>I understood</legend>
+        {hasContext && <fieldset className="context" disabled={busy}><legend>Plan settings</legend>
           <label>Exam<input value={context.subject} placeholder="Subject" onChange={e=>update('subject',e.target.value)}/></label>
           <label>Date<input value={context.date} placeholder="Exam date" onChange={e=>update('date',e.target.value)}/></label>
           <label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))))}/></label>
           <label>Pass mark<input value={context.pass} placeholder="Optional" onChange={e=>update('pass',e.target.value)}/></label>
           <label>Paper rules<input value={context.pattern} placeholder="Optional" onChange={e=>update('pattern',e.target.value)}/></label>
           {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
-          <span className="file-count">{files.length} PDF{files.length===1?'':'s'}</span>
         </fieldset>}
         {needsTime && <form className="followup" onSubmit={e=>{e.preventDefault();const minutes=duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0);if(!minutes||!Number.isSafeInteger(minutes)){setNotice('Enter study time in minutes or hours.');return;} const adjusted={...context,minutes};setContext(adjusted);void generate(undefined,adjusted);}}><label htmlFor="time">How much time do you have to study?</label><div className="inline"><input autoFocus id="time" value={timeReply} onChange={e=>setTimeReply(e.target.value)} placeholder="e.g. 2 hours"/><button className="primary">Continue</button></div></form>}
-        <div className="setup-meta"><small>{sampleMode?'PDFs stay on this device. This demo uses sample DBMS data.':'PDF files stay on this device. Extracted text is sent to the analysis server.'}</small><button className="link accent" type="button" disabled={busy} onClick={toggleExample}>{exampleMode?'Use my materials':'Try an example'}</button></div>
+        <div className="setup-meta"><button className="link accent" type="button" disabled={busy} onClick={toggleExample}>{exampleMode?'Exit demo':'Try an example'}</button>{sampleMode?<small>Demo · Sample DBMS data</small>:hasContext&&<small>PDFs stay on device. Text is sent for analysis.</small>}</div>
         {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading sample questions…':processingMessage}</p>
           {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
         </div>}
@@ -262,13 +278,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             : <button className="primary" type="button" onClick={()=>void generate(undefined,context,'continue')}>Build verified plan</button>}
         </div>}
       </section>
-      {!result && <section className="features" aria-label="How the planner works">
-        <Feature icon="file" title="Bring what you have" detail="Syllabus, past papers, notes, or pasted text."/>
-        <Feature icon="clock" title="Plan around your time" detail="Get a study list that fits the hours you have."/>
-        <Feature icon="spark" title="See why it’s ranked" detail="Review the reason and source behind each question."/>
-      </section>}
       {result && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><div><div className="eyebrow">{sampleMode?'SAMPLE DBMS PLAN':'YOUR EXAM PLAN'}</div><h2 id="results-title" tabIndex={-1}>{visible.length?'Your first '+visible.length:'Your study plan'}</h2></div><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div>
+        <div className="result-top"><h2 id="results-title" tabIndex={-1}>{sampleMode?'Sample study plan':'Study plan'}</h2><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div>
         <div className="summary"><span>Exam: {context.subject||'Unspecified'}</span><span>{plan?.totalAvailableMinutes??context.minutes} min remaining</span><span>{files.length} PDFs attached</span><span>{sampleMode?'Evidence: demo fixtures':result.some(q=>q.reason.startsWith('Found in'))?'Evidence: uploaded past papers':'Evidence: supplied text'}</span></div>
         {warnings.length>0&&<ul className="notice" aria-label="Extraction warnings">{warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>}
         {plan&&<p className="notice">Full plan · {plan.estimatedPreparationMinutes} of {plan.preparationBudgetMinutes} preparation minutes · {plan.revisionMinutes} min reserved for revision · {plan.coveredTopicIds.length} identified topics covered</p>}
@@ -285,7 +296,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </div><aside className="coach" aria-label="Contextual chat"><h3><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3><div className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:messages.map((m,i)=><div key={i}><strong>{m.role}</strong><p>{m.text}</p>{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div><form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()}><Icon name="send"/></button></form></aside></div>
       </section>}
     </main>
-    <footer className="wrap footer"><span>in-nocent<span className="brand-dot">.</span></span><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>
+    <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>
     <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>
       {source?<><h2 id="dialog-title">{source.file}</h2><p>{sampleMode?'Sample fixture · ':''}{source.file==='Pasted text'?source.number:'Page '+source.page+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={sourceUrl+'#page='+source.page}>Open original PDF at page {source.page}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>PDF files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
     </div></dialog>
@@ -301,9 +312,6 @@ function Plans() {
   </>;
 }
 
-function Feature({icon,title,detail}:{icon:'file'|'clock'|'spark';title:string;detail:string}) {
-  return <article><span className="feature-icon"><Icon name={icon}/></span><h2>{title}</h2><p>{detail}</p></article>;
-}
 const root=typeof document==='undefined'?null:document.getElementById('root');
 if(root) {
   const appRoot=createRoot(root);

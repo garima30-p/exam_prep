@@ -8,7 +8,7 @@ describe('exam setup',()=>{
     const html=renderToStaticMarkup(<App/>);
     expect(html).toContain('for="prompt"');
     expect(html).toContain('multiple=""');
-    expect(html).toContain('This demo uses sample DBMS data.');
+    expect(html).toContain('Demo · Sample DBMS data');
     expect(html).not.toContain('How much time do you have to study?');
   });
   it('extracts common exam details and leaves missing time unset',()=>{

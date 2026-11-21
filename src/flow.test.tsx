@@ -40,7 +40,7 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(host.querySelector('a[href="#results-title"]')).not.toBeNull();
     await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. I have two hours.'));
     expect(host.querySelector('a[href="#results-title"]')).toBeNull();
-    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Build my plan');
+    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Generate plan');
   } finally {
     await act(async()=>root.unmount());
     host.remove();
