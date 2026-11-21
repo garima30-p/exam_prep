@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Material } from './api';
+import { documentFormat, documentLocation, originalDocumentLink } from './document-formats';
 import { isTrusted } from './document-state';
 import type { ExtractedDocument, ExtractedPage } from './document-state';
 
@@ -34,16 +35,16 @@ export function DocumentReview({documents,files,busy,onVerify}:{
       const failed=document.pages.filter(page=>page.status==='failed').length;
       const unverified=document.total===null?null:document.total-trusted;
       return <details key={document.id}>
-        <summary><strong>{document.name}</strong> · {document.total===null?'PDF not yet readable':trusted+' of '+document.total+' pages usable'}{unverified?' · '+unverified+' need review or processing':''}</summary>
+        <summary><strong>{document.name}</strong> · {document.total===null?'File not yet readable':trusted+' of '+document.total+' parts usable'}{unverified?' · '+unverified+' need review or processing':''}</summary>
         {document.error&&<p>{document.error}</p>}
-        <p>{ocr} OCR pages · {failed} unreadable · {document.pages.filter(isTrusted).reduce((sum,page)=>sum+page.questions,0)} questions identified in usable text</p>
-        <ul>{document.pages.map(page=><li key={page.number}><button className="link accent" disabled={busy||page.status==='pending'} onClick={()=>review(document.id,page)}>Page {page.number} · {stateLabels[page.status]}</button></li>)}</ul>
+        <p>{ocr} OCR parts · {failed} unreadable · {document.pages.filter(isTrusted).reduce((sum,page)=>sum+page.questions,0)} questions identified in usable text</p>
+        <ul>{document.pages.map(page=><li key={page.number}><button className="link accent" disabled={busy||page.status==='pending'} onClick={()=>review(document.id,page)}>{documentLocation(document.name,page.number)} · {stateLabels[page.status]}</button></li>)}</ul>
       </details>;
     })}
     {selection&&selected&&<div className="page-review">
       <div className="inline">
-        <h3>{activeDocument?.name} · Review page {selected.number}</h3>
-        {original&&<a className="link accent" href={original+'#page='+selected.number} target="_blank" rel="noopener noreferrer">Open original PDF page</a>}
+        <h3>{activeDocument?.name} · {documentLocation(activeDocument?.name??'',selected.number)} review</h3>
+        {original&&<a className="link accent" href={originalDocumentLink(file?.name??'',original,selected.number)} target="_blank" rel="noopener noreferrer">{documentFormat(file?.name??'')==='pdf'?'Open original PDF page':'Open original file'}</a>}
       </div>
       {selected.reason&&<p>{selected.reason}</p>}
       <label htmlFor="review-text">Extracted text</label>
@@ -54,7 +55,7 @@ export function DocumentReview({documents,files,busy,onVerify}:{
         <button className="primary" type="button" disabled={busy||!selection.draft.trim()}
           onClick={()=>{onVerify(selection.id,selection.page,selection.draft);setSelection(null);}}>Save verified text</button>
         <button className="secondary" type="button" disabled={busy||selection.draft.trim().length>0}
-          onClick={()=>{onVerify(selection.id,selection.page,'');setSelection(null);}}>Confirm blank page</button>
+          onClick={()=>{onVerify(selection.id,selection.page,'');setSelection(null);}}>Confirm blank</button>
         <button className="secondary" type="button" onClick={()=>setSelection(null)}>Close review</button>
       </div>
       <details>

@@ -18,6 +18,31 @@ export async function createOcr(signal:AbortSignal) {
   let termination:ReturnType<typeof worker.terminate>|undefined;
   const close=()=>termination??=worker.terminate();
   return {
+    async readImage(file:File,kind:string,retry:boolean) {
+      const decoding=createImageBitmap(file);
+      const image=await abortable(decoding,signal,()=>{void decoding.then(bitmap=>bitmap.close()).catch(()=>{});});
+      const canvas=document.createElement('canvas');
+      const scale=Math.min(1,3200/Math.max(image.width,image.height),Math.sqrt(7_000_000/(image.width*image.height)));
+      canvas.width=Math.max(1,Math.round(image.width*scale));
+      canvas.height=Math.max(1,Math.round(image.height*scale));
+      try {
+        const context=canvas.getContext('2d');
+        if(!context)throw new Error('Canvas unavailable');
+        context.fillStyle='#fff';
+        context.fillRect(0,0,canvas.width,canvas.height);
+        context.drawImage(image,0,0,canvas.width,canvas.height);
+        if(retry)context.putImageData(enhanceScan(context.getImageData(0,0,canvas.width,canvas.height),false),0,0);
+        const stop=()=>{void close();};
+        await abortable(worker.setParameters({tessedit_pageseg_mode:retry?PSM.SPARSE_TEXT:PSM.AUTO,
+          user_defined_dpi:'150',preserve_interword_spaces:'1'}),signal,stop);
+        const timeout=AbortSignal.any([signal,AbortSignal.timeout(30000)]);
+        const {data}=await abortable(worker.recognize(canvas),timeout,stop);
+        return {text:formatPageText(data.text,kind),confidence:data.confidence,variant:retry?'Enhanced image':'Image'};
+      } finally {
+        image.close();
+        canvas.width=canvas.height=0;
+      }
+    },
     async read(page:PDFPageProxy,kind:string,manual:boolean,onPass:(pass:number)=>void) {
       const original=page.getViewport({scale:1});
       const deviceMemory=(navigator as Navigator&{deviceMemory?:number}).deviceMemory;

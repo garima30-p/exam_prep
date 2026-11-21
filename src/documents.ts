@@ -2,11 +2,12 @@
 import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist';
 import type { PDFPageProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { chooseReading, countSupportedOcrQuestions, formatPageText, pageQuality } from '../server/page-text.mjs';
+import { chooseReading, countQuestions, countSupportedOcrQuestions, formatPageText, pageQuality } from '../server/page-text.mjs';
 import { isTrusted } from './document-state';
 import type { ExtractedPage, PrepareOptions } from './document-state';
 import type { Material } from './api';
 import { abortable } from './abortable';
+import { documentFormat } from './document-formats';
 
 GlobalWorkerOptions.workerSrc=workerUrl;
 
@@ -46,6 +47,54 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
       if(record.total!==null&&!record.pages.some(page=>page.status==='pending'||retry&&!isTrusted(page)))continue;
       const label=(page?:number)=>item.file.name+' ('+(fileIndex+1)+'/'+files.length+')'+(page?' · page '+page+' of '+record.total:'');
       publish('Opening '+label());
+      const format=documentFormat(item.file.name);
+      if(format==='word'||format==='slides'){
+        try {
+          const pages=await (await import('./office-text')).readOfficeText(item.file,format,signal);
+          record.error=undefined;
+          record.total=pages.length;
+          record.pages=pages.map((text,index)=>{
+            const number=index+1;
+            const cached=record.pages[index];
+            if(cached&&isTrusted(cached))return cached;
+            const usable=formatPageText(text,item.kind);
+            return {number,text:usable,status:usable?'extracted':'review',method:'office-text',
+              questions:countQuestions(usable,item.kind==='Past paper'),
+              reason:usable?'':'No editable text found. Verify the content or attach a screenshot to scan it.'};
+          });
+          publish('Processed '+label());
+        }catch(error){
+          signal.throwIfAborted();
+          record.error=error instanceof Error?error.message:'This Office file could not be opened.';
+          publish(record.error);
+        }
+        continue;
+      }
+      if(format==='image'){
+        const cached=record.pages[0]??pending(1);
+        record.total=1;
+        record.error=undefined;
+        record.pages=[cached];
+        try {
+          publish('Scanning '+label());
+          ocr??=await (await import('./ocr')).createOcr(signal);
+          const reading=await ocr.readImage(item.file,item.kind,Boolean(retry));
+          const prior=cached.text?{text:cached.text,confidence:cached.confidence??null,variant:'Prior image'}:null;
+          const best=chooseReading(prior,reading,item.kind);
+          const quality=pageQuality(best.text,item.kind,best.confidence);
+          record.pages=[{number:1,text:best.text,status:quality.status,method:'ocr',
+            questions:quality.status==='extracted'?countSupportedOcrQuestions(best.text,item.kind==='Past paper'):quality.questions,
+            reason:quality.reason,...(best.confidence!==null?{confidence:best.confidence}:{}),
+            attempts:[...cached.attempts??[],{variant:reading.variant,confidence:reading.confidence}].slice(-16)}];
+        }catch{
+          signal.throwIfAborted();
+          await ocr?.close().catch(()=>{});
+          ocr=undefined;
+          record.pages=[{...cached,status:cached.text?'review':'failed',method:'ocr',reason:'The image could not be read. Check the original or retry.'}];
+        }
+        publish('Processed '+label());
+        continue;
+      }
       const data=await abortable(item.file.arrayBuffer(),signal);
       const task=getDocument({data,enableXfa:false,wasmUrl:new URL('/pdfjs/wasm/',location.href).href});
       let destruction:Promise<void>|undefined;

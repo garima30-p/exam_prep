@@ -9,6 +9,7 @@ import { countQuestions } from '../server/page-text.mjs';
 import { documentComplete } from './document-state';
 import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
+import { acceptedDocuments, documentFormat, documentLocation, originalDocumentLink } from './document-formats';
 import { StudyCharacter, ThemeHero, ThemePicker, useTheme } from './themes';
 import { answerLines, buildStudyPack, familiarityLabels, sourceLabel } from './study-pack';
 import { DownloadStudyPack, StudyOutput } from './study-output';
@@ -80,7 +81,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if (!incoming || busy) return;
     const accepted:Material[]=[]; const errors:string[]=[];
     for(const file of Array.from(incoming)) {
-      if(!/\.pdf$/i.test(file.name) || file.size>20*1024*1024) { errors.push(file.name); continue; }
+      if(!documentFormat(file.name) || file.size>20*1024*1024) { errors.push(file.name); continue; }
       if(files.some(item=>item.file.name===file.name && item.file.size===file.size && item.file.lastModified===file.lastModified) ||
         accepted.some(item=>item.file.name===file.name && item.file.size===file.size && item.file.lastModified===file.lastModified)) continue;
       if(files.length+accepted.length>=8) { errors.push(file.name); continue; }
@@ -88,7 +89,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
     setFiles([...files,...accepted]);
     if(accepted.length){setPlanGenerated(false);setAwaitReview(false);}
-    setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 PDFs of 20 MB each.' : '');
+    setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 files of 20 MB each. Use PDF, DOCX, PPTX, PNG, JPEG, WebP, or BMP. Save older .ppt files as .pptx.' : '');
   };
   const editPrompt=(value:string)=>{setPrompt(value);setContext(activeApi.parse(value));setNeedsTime(false);setPlanGenerated(false);};
   const restartBudget=()=>{timeAnchor.current=Date.now();setElapsed(0);};
@@ -99,12 +100,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   async function generate(event?:FormEvent, adjusted=context,mode:'normal'|'retry'|'continue'='normal') {
     event?.preventDefault();
     if(controller.current) return;
-    if(!prompt.trim() && !files.length) {setNotice('Describe your exam or attach a PDF to begin.');return;}
+    if(!prompt.trim() && !files.length) {setNotice('Describe your exam or attach a file to begin.');return;}
     if(!adjusted.minutes){setNeedsTime(true);return;}
     setNeedsTime(false);setNotice('');setBusy(true);
     const run=new AbortController();
     controller.current=run;
-    setProcessingMessage(activeApi.prepare&&files.length?'Opening attached PDFs…':'Building your plan…');
+    setProcessingMessage(activeApi.prepare&&files.length?'Opening attachments…':'Building your plan…');
     try {
       let records=documents.filter(document=>files.some(file=>file.id===document.id));
       if(activeApi.prepare&&files.length&&mode!=='continue'){
@@ -242,7 +243,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         <button className="link accent" onClick={()=>open(null,q.answerSource!)}>{sourceLabel(q.answerSource)}</button>
       </details>}
       {!sampleMode&&!q.answerSource&&<p>No supporting answer passage is available.</p>}
-      {(q.sources??[q.source]).map((reference,i)=><button key={i} className="link accent source" onClick={()=>open(null,reference)}><Icon name="file"/>{reference.file} · {reference.file==='Pasted text'?reference.number:'p. '+reference.page+' · '+reference.number}</button>)}
+      {(q.sources??[q.source]).map((reference,i)=><button key={i} className="link accent source" onClick={()=>open(null,reference)}><Icon name="file"/>{sourceLabel(reference)}</button>)}
       {effort&&q.learning&&<details className="checkpoints">
         <summary>{q.learning.type} · {preparationLabels[effort.status]} · {effort.completed}/{effort.total} checkpoints</summary>
         <p>Remaining estimate: {effort.remaining.understanding} min understanding, {effort.remaining.practice} min practice, {effort.remaining.recall} min recall.</p>
@@ -279,8 +280,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="e.g. DBMS exam tomorrow, 5 hours to study" rows={3} maxLength={8000}/>
           {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
-            <input hidden ref={input} type="file" accept="application/pdf,.pdf" multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
-            <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach PDFs</button>
+            <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
+            <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
             {planGenerated
               ? <a className="primary" href="#results-title">Plan generated<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v15m-6-6 6 6 6-6"/></svg></a>
               : <button className="primary" disabled={busy} type="submit">{busy?'Preparing plan…':'Generate plan'}</button>}
@@ -296,7 +297,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
         </fieldset>}
         {needsTime && <form className="followup" onSubmit={e=>{e.preventDefault();const minutes=duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0);if(!minutes||!Number.isSafeInteger(minutes)){setNotice('Enter study time in minutes or hours.');return;} const adjusted={...context,minutes};setContext(adjusted);void generate(undefined,adjusted);}}><label htmlFor="time">How much time do you have to study?</label><div className="inline"><input autoFocus id="time" value={timeReply} onChange={e=>setTimeReply(e.target.value)} placeholder="e.g. 2 hours"/><button className="primary">Continue</button></div></form>}
-        <div className="setup-meta"><button className="link accent" type="button" disabled={busy} onClick={toggleExample}>{exampleMode?'Exit demo':'Try an example'}</button>{sampleMode?<small>Demo · Sample DBMS data</small>:hasContext&&<small>PDFs stay on device. Text is sent for analysis.</small>}</div>
+        <div className="setup-meta"><button className="link accent" type="button" disabled={busy} onClick={toggleExample}>{exampleMode?'Exit demo':'Try an example'}</button>{sampleMode?<small>Demo · Sample DBMS data</small>:hasContext&&<small>Original files stay on device. Text is sent for analysis.</small>}</div>
         {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading sample questions…':processingMessage}</p>
           {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
         </div>}
@@ -331,7 +332,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </main>
     <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>
     <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>
-      {source?<><h2 id="dialog-title">{source.file}</h2><p>{sampleMode?'Sample fixture · ':''}{source.file==='Pasted text'?source.number:'Page '+source.page+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={sourceUrl+'#page='+source.page}>Open original PDF at page {source.page}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>PDF files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
+      {source?<><h2 id="dialog-title">{source.file}</h2><p>{sampleMode?'Sample fixture · ':''}{source.file==='Pasted text'?source.number:documentLocation(source.file,source.page)+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={originalDocumentLink(source.file,sourceUrl,source.page)}>{documentFormat(source.file)==='pdf'?'Open original PDF at page '+source.page:'Open original file'}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>Original files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
     </div></dialog>
   </>;
 }

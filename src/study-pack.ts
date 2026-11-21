@@ -1,3 +1,4 @@
+import { documentFormat, documentLocation } from './document-formats';
 import type { Context, Question, Source } from './api';
 import type { LearningPlan } from '../server/learning.mjs';
 
@@ -23,8 +24,11 @@ export type StudyPack = {
 };
 export type Section = 'all' | 'notes' | 'timeline' | 'questions';
 
-export const sourceLabel = (source: Source) =>
-  source.file + (source.file === 'Pasted text' ? '' : ' · p. ' + source.page) + ' · ' + source.number;
+export const sourceLabel = (source: Source) => {
+  const format=documentFormat(source.file);
+  const location=format&&format!=='pdf'?documentLocation(source.file,source.page):'p. '+source.page;
+  return source.file+(source.file==='Pasted text'?'':' · '+location)+' · '+source.number;
+};
 
 export function answerLines(question: Question, sample: boolean, minutes: number) {
   const text = question.answerSource?.excerpt || (sample ? question.answer : '');

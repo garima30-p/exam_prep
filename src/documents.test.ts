@@ -7,7 +7,7 @@ import type { Material } from './api';
 
 const mock=vi.hoisted(()=>({
   cleanup:vi.fn(),destroy:vi.fn(async()=>{}),close:vi.fn(async()=>{}),
-  read:vi.fn(),native:new Set<number>(),rotation:90
+  read:vi.fn(),readImage:vi.fn(),native:new Set<number>(),rotation:90
 }));
 vi.mock('pdfjs-dist',()=>({
   GlobalWorkerOptions:{},
@@ -20,13 +20,26 @@ vi.mock('pdfjs-dist',()=>({
     destroy:mock.destroy
   })
 }));
-vi.mock('./ocr',()=>({createOcr:async()=>({read:mock.read,close:mock.close})}));
+vi.mock('./ocr',()=>({createOcr:async()=>({read:mock.read,readImage:mock.readImage,close:mock.close})}));
 
 const item=(id:number,count:number):Material=>({id,kind:'Past paper',file:{
   name:'paper'+id+'.pdf',arrayBuffer:async()=>Uint8Array.from([count]).buffer
 } as File});
 const reading=(number:number,confidence=88)=>({best:{text:'Explain the use of virtual memory in system '+number+'.',confidence,variant:'raw'},attempts:[],dpi:230,rotation:90});
 const options=(controller=new AbortController()):PrepareOptions=>({signal:controller.signal,records:[],onUpdate:vi.fn()});
+
+it('routes image attachments through OCR and retries only unreadable images',async()=>{
+  const image={id:8,kind:'Notes',file:new File(['image'],'notes.png')};
+  const run=options();
+  mock.readImage.mockReset();
+  mock.readImage.mockResolvedValueOnce(reading(1,25).best).mockResolvedValueOnce(reading(1).best);
+  const first=await extractDocuments([image],run);
+  expect(first[0].pages[0]).toMatchObject({status:'review',method:'ocr'});
+  const checked=await extractDocuments([image],{...run,records:first,retry:true});
+  expect(documentComplete(checked[0])).toBe(true);
+  await extractDocuments([image],{...run,records:checked,retry:true});
+  expect(mock.readImage.mock.calls.map(call=>call[2])).toEqual([false,true]);
+});
 
 it('processes more than six pages across two documents in sequence, skips OCR for native pages, and reuses the cache',async()=>{
   mock.native=new Set([1]);mock.read.mockReset();mock.cleanup.mockClear();mock.close.mockClear();

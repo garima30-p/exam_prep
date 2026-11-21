@@ -4,7 +4,7 @@ import type { Familiarity, LearningCandidate, LearningPlan, LearningProfile } fr
 import type { ExtractedDocument, PrepareOptions } from './document-state';
 export type Context = {subject:string; date:string; minutes:number; pass:string; pattern:string; familiarity:Familiarity};
 export type Material = {id:number; file:File; kind:string};
-export type Source = {id?:string; file:string; page:number; number:string; excerpt:string; documentIndex?:number;method?:'pdf-text'|'ocr'|'manual'};
+export type Source = {id?:string; file:string; page:number; number:string; excerpt:string; documentIndex?:number;method?:'pdf-text'|'office-text'|'ocr'|'manual'};
 export type Question = {id:number; topic:string; unit:number; prompt:string; minutes:number; marks:number; reason:string; source:Source; sources?:Source[]; answerSource?:Source|null; answer:string;learning?:LearningProfile;historicalFrequency?:number;historicalPaperCount?:number};
 export type RankedQuestion = Question & LearningCandidate & {
   historicalFrequency:number;

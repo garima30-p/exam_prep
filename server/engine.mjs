@@ -210,7 +210,7 @@ function validate(body) {
       if (!page || !Number.isSafeInteger(page.number) || page.number<1 || numbers.has(page.number) || typeof page.text!=='string' || page.text.length>150_000) return null;
       numbers.add(page.number);
       if(page.status==='review'||page.status==='failed'||page.status==='pending')continue;
-      safePages.push({number:page.number,text:page.text,method:['pdf-text','ocr','manual'].includes(page.method)?page.method:undefined});
+      safePages.push({number:page.number,text:page.text,method:['pdf-text','office-text','ocr','manual'].includes(page.method)?page.method:undefined});
     }
     const declared=Number.isSafeInteger(item.totalPages)&&item.totalPages>0?item.totalPages:null;
     const complete=item.complete!==false&&safePages.length===item.pages.length&&

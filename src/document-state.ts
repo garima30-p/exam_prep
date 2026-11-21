@@ -4,7 +4,7 @@ export type ExtractedPage = {
   number:number;
   text:string;
   status:'pending'|'extracted'|'review'|'failed'|'verified';
-  method:'none'|'pdf-text'|'ocr'|'manual';
+  method:'none'|'pdf-text'|'office-text'|'ocr'|'manual';
   confidence?:number;
   questions:number;
   reason:string;

@@ -13,7 +13,7 @@ export const liveApi:ExamApi = {
   prepare:extractDocuments,
   async analyze(context, files, prompt, options):Promise<Analysis> {
     const warnings:string[]=[];
-    if(files.length&&!options?.documents)throw new Error('Read and check the attached PDFs before generating a plan.');
+    if(files.length&&!options?.documents)throw new Error('Read and check the attachments before generating a plan.');
     const materials=files.map(item=>{
       const record=options?.documents.find(document=>document.id===item.id);
       const complete=record!==undefined&&documentComplete(record);
