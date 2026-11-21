@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "exam-prep",
+  "main": "server/worker.mjs",
+  "compatibility_date": "2026-11-21",
+  "assets": {
+    "directory": "./dist",
+    "run_worker_first": ["/api/*"]
+  }
+}

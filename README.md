@@ -30,7 +30,13 @@ See [DOCUMENT-PROCESSING.md](DOCUMENT-PROCESSING.md) for the three TCS502 compar
 - `POST /api/analyze` accepts classified materials with per-page text, available minutes, paper rules and familiarity. It returns evidence-bearing candidates, topic weights, estimates and a preparation plan.
 - The first ten recommendations appear immediately. **Show next 10** reveals additional selected questions. When the first ten lack coverage of a requirement represented in the full plan, the app flags that gap.
 - Expand a question’s checkpoints and record an attempt as incomplete, completed, or needing revision. Completed work and out-of-plan checkpoints remain accessible under **Revisit checkpoint progress**. On checkpoint or familiarity changes, the planner samples elapsed session time and subtracts whole minutes from the last stated budget. Giving a new time in chat starts a fresh budget. “I’m mostly revising” changes effort estimates and preserves checkpoint progress. A new analysis or reload starts a new checkpoint session.
-- `functions/api/[[path]].js` is a Cloudflare Pages Functions adapter. `dist/` contains the static bundle. Deploy the project source with the Functions directory alongside the configured `dist` output. A static-only upload omits the analysis endpoint.
+- `wrangler.jsonc` targets the existing `exam-prep` Cloudflare Worker. Wrangler serves `dist/` as static assets and routes `/api/*` to `server/worker.mjs`. The Pages Functions adapter remains available for Pages deployments.
+
+### Cloudflare Workers Builds
+
+The connected Git repository uses the project root, `npm run build` as the build command, and `npx wrangler deploy` as the deploy command. Verify the bundle locally with `npx wrangler deploy --dry-run`. Use `npx wrangler dev` after building to exercise the Worker API and static assets together.
+
+Transformers.js 3.8.1 uses native ONNX Runtime CPU inference for the local evaluation CLI. Browser embeddings use ONNX Runtime Web WASM through the existing Web Worker. The deployment Worker imports neither inference runtime. The project `.npmrc` sets `onnxruntime-node-install-cuda=skip`, which ONNX Runtime 1.21.0 reads during `npm ci`. With a build environment override, use `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` for this locked version. Other npm lifecycle scripts remain enabled.
 
 The API is stateless and does not save files, extracted text or account history. This release does not provision a Cloudflare project, Workers AI, D1, identity, distributed quotas or billing. The local browser tests used a synthetic two-page PDF with one text page and one scanned page.
 
