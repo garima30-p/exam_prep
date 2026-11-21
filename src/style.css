@@ -71,10 +71,17 @@ button:disabled{opacity:.55;cursor:default}
 [data-theme="anime"] .hero h1{font-weight:850;letter-spacing:-.08em}
 [data-theme="soft"] .hero h1{font-family:Georgia,serif;font-weight:400;letter-spacing:-.045em}
 [data-theme="soft"] .hero em{font-style:italic}
-.theme-kitties{display:flex;justify-content:center;align-items:center;gap:.75rem;margin-top:.65rem;font-size:1.15rem}
-.theme-kitties span:first-child{transform:rotate(-10deg)}
-.theme-kitties span:last-child{transform:rotate(10deg)}
-.gojo{position:relative;isolation:isolate;width:66px;height:66px;margin:0 auto .6rem;overflow:hidden;border:1px solid #a57bdd;border-radius:50%;background:radial-gradient(circle,#6a40a5,#2b1b43)}
+.theme-scene{display:grid;justify-items:center;gap:.2rem;margin:.85rem auto 0}
+.scene-props{display:flex;justify-content:center;align-items:center;gap:clamp(.35rem,2vw,.95rem);min-height:66px}
+.cute-prop{display:grid;place-items:center;width:clamp(40px,10vw,60px);aspect-ratio:1;border-radius:42% 52% 45% 48%;background:#fce1ec;border:1px solid #e9bacc;font-family:"Segoe UI Emoji","Apple Color Emoji",sans-serif;font-size:clamp(1.2rem,5vw,1.85rem);line-height:1;transform:rotate(-8deg)}
+.cute-prop:nth-child(even){background:#efddf8;border-color:#d8b8e6;transform:rotate(9deg)}
+.cute-fidget{grid-template-columns:repeat(2,.65rem);grid-template-rows:repeat(2,.65rem);place-content:center;gap:.22rem;background:#f8ccde}
+.cute-fidget i{aspect-ratio:1;border-radius:50%;background:#ae77ce;box-shadow:inset 1px 2px 2px #6c37725e}
+.cute-fidget i:nth-child(even){background:#e888af}
+.storm-props{gap:clamp(.9rem,4vw,2.5rem);min-width:min(100%,18rem);background:radial-gradient(ellipse,#b66ee539,transparent 68%)}
+.storm-bolt{width:34px;height:52px;background:#d6a1ff;clip-path:polygon(48% 0,100% 0,63% 40%,94% 40%,12% 100%,42% 54%,11% 54%);transform:rotate(14deg)}
+.storm-bolt-small{width:24px;height:38px;transform:rotate(-22deg);background:#b477f5}
+.gojo{position:relative;isolation:isolate;width:66px;height:66px;overflow:hidden;border:1px solid #a57bdd;border-radius:50%;background:radial-gradient(circle,#6a40a5,#2b1b43)}
 .gojo::before,.gojo span{position:absolute;display:block}
 .gojo::before{content:"";inset:43px 8px -6px;border-radius:48% 48% 0 0;background:#181625}
 .gojo-face{inset:17px 18px 14px;border-radius:35% 35% 50% 50%;background:#f0cbbb}

@@ -9,6 +9,7 @@ import { countQuestions } from '../server/page-text.mjs';
 import { documentComplete } from './document-state';
 import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
+import { playThemeSound } from './theme-sound';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
@@ -30,6 +31,25 @@ function savedTheme(): Theme {
   return 'simple';
 }
 
+function ThemeScene({theme}:{theme:'anime'|'soft'}) {
+  const anime=theme==='anime';
+  return <div className="theme-scene">
+    {anime
+      ? <div className="scene-props storm-props">
+          <span className="storm-bolt" aria-hidden="true"/>
+          <div className="gojo" role="img" aria-label="Satoru Gojo"><span className="gojo-face"/><span className="gojo-hair"/><span className="gojo-blindfold"/></div>
+          <span className="storm-bolt storm-bolt-small" aria-hidden="true"/>
+        </div>
+      : <div className="scene-props cute-props" aria-hidden="true">
+          <span className="cute-prop">🧋</span>
+          <span className="cute-prop">🐈</span>
+          <span className="cute-prop cute-fidget"><i/><i/><i/><i/></span>
+          <span className="cute-prop">🐱</span>
+          <span className="cute-prop">🧸</span>
+        </div>}
+  </div>;
+}
+
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
   const paths = {
     clip:'M21 11.5l-8.7 8.7a5 5 0 01-7.1-7.1l9.4-9.4a3.5 3.5 0 015 5l-9.4 9.4a2 2 0 01-2.8-2.8l8.7-8.7',
@@ -43,6 +63,10 @@ function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
 
 export function App({api=demoApi}:{api?:ExamApi}) {
   const [theme,setTheme]=useState(savedTheme);
+  function selectTheme(next:Theme) {
+    setTheme(next);
+    if (next!=='simple') void playThemeSound(next).catch(()=>{ /* Theme selection also works without audio. */ });
+  }
   useEffect(()=>{
     document.documentElement.dataset.theme=theme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content',
@@ -235,15 +259,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   return <>
     <header className="top"><div className="wrap header-inner">
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
-      <label className="theme-picker"><span>Theme</span><select value={theme} onChange={event=>setTheme(event.target.value as Theme)}>
+      <label className="theme-picker"><span>Theme</span><select value={theme} onChange={event=>selectTheme(event.target.value as Theme)}>
         {Object.entries(themes).map(([value,label])=><option key={value} value={value}>{label}</option>)}
       </select></label>
     </div></header>
     <main id="main" className={'wrap '+(result?'workspace':'landing')}>
       <section className="hero">
-        {theme==='anime'&&<div className="gojo" role="img" aria-label="Satoru Gojo"><span className="gojo-face"/><span className="gojo-hair"/><span className="gojo-blindfold"/></div>}
         <h1>Exam <em>planner</em></h1>
-        {theme==='soft'&&<div className="theme-kitties" aria-hidden="true"><span>🐱</span><span>🐈</span><span>🐈‍⬛</span></div>}
+        {theme!=='simple'&&<ThemeScene key={theme} theme={theme}/>}
       </section>
       <section aria-label="Exam setup" className="setup">
         <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
