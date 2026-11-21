@@ -1,11 +1,5 @@
 # Anime character artwork
 
-Place approved character illustrations in this directory. Use transparent WebP files with a vertical composition and enough room around the character for the aura.
+The supplied 1536 × 1024 artwork sheet was split into 24 individual 256 × 256 WebP portraits. The original artwork backgrounds and effects are preserved.
 
-| Theme | Character | Filename |
-| --- | --- | --- |
-| Jujutsu Kaisen | Satoru Gojo | `gojo.webp` |
-| Demon Slayer | Tanjiro Kamado | `tanjiro.webp` |
-| Attack on Titan | Levi Ackerman | `levi.webp` |
-
-Rebuild after adding the files. The theme registry discovers them automatically and the selected anime loads its artwork on demand.
+Portraits are grouped under `public/assets/anime/`. The roster and filenames are defined in `src/anime.ts`. To replace a portrait, update its WebP in the corresponding anime directory.

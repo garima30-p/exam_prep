@@ -37,10 +37,16 @@ it('switches themes without losing exam input and restores the muted selection',
     expect(button('Jujutsu Kaisen')).toBeDefined();
     await click(button('Jujutsu Kaisen'));
     expect(playThemeSound).toHaveBeenLastCalledWith('thunder');
+    expect(host.querySelectorAll('.character-card')).toHaveLength(8);
+    await click(button('Nobara Kugisaki'));
+    expect(host.querySelector('.character-scene img')?.getAttribute('src')).toBe('/assets/anime/jjk/nobara.webp');
     await click(button('Demon Slayer'));
     expect(host.querySelector('.character-scene')?.textContent).toContain('Tanjiro Kamado');
+    expect(button('Shinobu Kocho')).toBeDefined();
     expect(playThemeSound).toHaveBeenLastCalledWith('swish');
     await click(button('Attack on Titan'));
+    expect(button('Mikasa Ackerman')).toBeDefined();
+    await click(button('Levi Ackerman'));
     expect(playThemeSound).toHaveBeenLastCalledWith('impact');
     await click(button('Minimal'));
     expect(playThemeSound).toHaveBeenLastCalledWith('click');
@@ -55,6 +61,7 @@ it('switches themes without losing exam input and restores the muted selection',
     root = createRoot(host);
     await act(async () => root.render(<App/>));
     expect(document.documentElement.dataset.theme).toBe('anime-aot');
+    expect(host.querySelector('.character-scene img')?.getAttribute('src')).toBe('/assets/anime/aot/levi.webp');
     expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
     expect(playThemeSound).toHaveBeenCalledTimes(soundCount);
   } finally {

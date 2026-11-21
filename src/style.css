@@ -164,10 +164,11 @@ dialog::backdrop{background:var(--backdrop)}
 [data-theme="anime-demon-slayer"] .hero h1{font-family:Georgia,serif;font-style:italic;letter-spacing:-.05em}
 [data-theme="anime-aot"] .hero h1{font-family:"Arial Narrow","Franklin Gothic Medium",sans-serif;font-weight:900;text-transform:uppercase;letter-spacing:-.065em}
 .character-scene{position:relative;display:grid;place-items:center;isolation:isolate;overflow:hidden;margin:0;min-height:clamp(210px,29vw,340px)}
-.character-scene img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:center bottom;filter:drop-shadow(0 0 20px var(--aura-glow))}
-.character-scene figcaption{position:relative;display:grid;gap:.28rem;max-width:90%;padding:.85rem 1rem;border:1px solid var(--line);background:var(--page);box-shadow:0 0 24px var(--aura-glow)}
-.character-scene figcaption strong{font-size:clamp(1.2rem,3vw,2.2rem);line-height:1}
-.character-scene figcaption span,.character-scene figcaption small{color:var(--muted);font-size:.74rem}
+.character-portrait{position:relative;width:min(78%,310px);margin:1rem 0;border:1px solid var(--accent);border-radius:var(--radius);overflow:hidden;background:var(--surface);box-shadow:0 0 22px var(--aura-glow);animation:portrait-arrival .24s ease-out both}
+.character-image,.character-fallback{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:contain}
+.character-fallback{display:grid;place-content:center;background:var(--subtle);font-size:.75rem}
+.character-portrait figcaption{position:absolute;inset:auto 0 0;padding:1.4rem .7rem .55rem;color:#fff;background:linear-gradient(transparent,#121018ee);text-align:left;font-size:.9rem;font-weight:750}
+@keyframes portrait-arrival{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .character-aura,.character-aura i{position:absolute;pointer-events:none}
 .character-aura{inset:0;z-index:-1}
 [data-theme="anime-jjk"]{--aura-glow:#a670ff9c}
@@ -236,13 +237,24 @@ dialog::backdrop{background:var(--backdrop)}
 .anime-options legend{font-size:.85rem;padding:0 .3rem}
 .theme-mute{display:flex;align-items:center;gap:.55rem;margin-top:.85rem;font-size:.9rem}
 .theme-mute input[type="checkbox"]{width:1rem;height:1rem;accent-color:var(--accent)}
+.character-options{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.55rem}
+.character-card{align-content:start;text-align:center}
+.character-card .character-image{border-radius:4px;background:var(--subtle)}
+.study-heading{display:flex;align-items:center;gap:.7rem;min-width:0}
+.study-character{position:relative;isolation:isolate;flex:none;width:clamp(38px,8vw,58px)}
+.study-character .character-image{position:relative;border-radius:var(--radius);border:1px solid var(--accent);animation:portrait-arrival .24s ease-out both}
+.study-aura-pulse{position:absolute;inset:0;z-index:-1;border:2px solid var(--accent);border-radius:var(--radius);animation:study-aura .65s ease-out both}
+@keyframes study-aura{from{opacity:.8;transform:scale(.9);box-shadow:0 0 12px var(--aura-glow)}to{opacity:0;transform:scale(1.55)}}
 @media(max-width:550px){
   .hero-anime,.workspace .hero-anime{grid-template-columns:1fr;text-align:center;padding:1.5rem 0 .3rem}
   .hero-anime h1 em{display:inline}
   .character-scene{min-height:190px}
+  .character-portrait{width:min(64%,210px)}
+  .character-options{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 @media(max-width:395px){.theme-current{display:none}}
 @media(prefers-reduced-motion:reduce){
-  .theme-transition,.prop-spark{display:none}
+  .theme-transition,.prop-spark,.study-aura-pulse{display:none}
+  .character-portrait,.study-character .character-image{animation:none}
   .desk-prop,.desk-prop span{animation:none!important;transition:none!important}
 }

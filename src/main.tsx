@@ -9,7 +9,7 @@ import { countQuestions } from '../server/page-text.mjs';
 import { documentComplete } from './document-state';
 import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
-import { ThemeHero, ThemePicker, useTheme } from './themes';
+import { StudyCharacter, ThemeHero, ThemePicker, useTheme } from './themes';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
@@ -32,6 +32,7 @@ function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
 
 export function App({api=demoApi}:{api?:ExamApi}) {
   const theme = useTheme();
+  const [characterPulse,setCharacterPulse]=useState(0);
   const [exampleMode,setExampleMode]=useState(false);
   const activeApi=exampleMode?demoApi:api;
   const sampleMode=activeApi===demoApi;
@@ -183,6 +184,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setPlanGenerated(false);
   }
   function changeCheckpoint(questionId:number,id:string,status:CheckpointState){
+    if(status==='completed'&&progress[questionId]?.[id]!=='completed') setCharacterPulse(value=>value+1);
     setProgress(current=>({...current,[questionId]:{...current[questionId],[id]:status}}));
     setElapsed(Math.max(0,Math.floor((Date.now()-timeAnchor.current)/60000)));
   }
@@ -221,7 +223,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       <ThemePicker {...theme}/>
     </div></header>
     <main id="main" className={'wrap '+(result?'workspace':'landing')}>
-      <ThemeHero theme={theme.theme} transition={theme.transition}/>
+      <ThemeHero {...theme}/>
       <section aria-label="Exam setup" className="setup">
         <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
           <label htmlFor="prompt">Exam details</label>
@@ -258,7 +260,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </div>}
       </section>
       {result && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><h2 id="results-title" tabIndex={-1}>{sampleMode?'Sample study plan':'Study plan'}</h2><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div>
+        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" tabIndex={-1}>{sampleMode?'Sample study plan':'Study plan'}</h2></div><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div>
         <div className="summary"><span>Exam: {context.subject||'Unspecified'}</span><span>{plan?.totalAvailableMinutes??context.minutes} min remaining</span><span>{files.length} PDFs attached</span><span>{sampleMode?'Evidence: demo fixtures':result.some(q=>q.reason.startsWith('Found in'))?'Evidence: uploaded past papers':'Evidence: supplied text'}</span></div>
         {warnings.length>0&&<ul className="notice" aria-label="Extraction warnings">{warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>}
         {plan&&<p className="notice">Full plan · {plan.estimatedPreparationMinutes} of {plan.preparationBudgetMinutes} preparation minutes · {plan.revisionMinutes} min reserved for revision · {plan.coveredTopicIds.length} identified topics covered</p>}

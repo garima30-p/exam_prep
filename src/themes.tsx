@@ -1,21 +1,18 @@
-/// <reference types="vite/client" />
 import { useEffect, useRef, useState } from 'react';
 import { playThemeSound } from './theme-sound';
+import { animeIds, animeThemes, characterImage } from './anime';
+import type { Anime, Character } from './anime';
 
 const themes = {
   minimal: { name: 'Minimal', sound: 'click' },
-  'anime-jjk': { name: 'Jujutsu Kaisen', sound: 'thunder', character: 'Satoru Gojo', art: 'gojo.webp' },
-  'anime-demon-slayer': { name: 'Demon Slayer', sound: 'swish', character: 'Tanjiro Kamado', art: 'tanjiro.webp' },
-  'anime-aot': { name: 'Attack on Titan', sound: 'impact', character: 'Levi Ackerman', art: 'levi.webp' },
+  ...animeThemes,
   cute: { name: 'Cute', sound: 'meow' },
 } as const;
 
 type Theme = keyof typeof themes;
-type Anime = Extract<Theme, `anime-${string}`>;
-const anime = Object.keys(themes).filter((id): id is Anime => id.startsWith('anime-'));
 const storageKey = 'in-nocent-theme';
 const muteKey = 'in-nocent-theme-muted';
-const art = import.meta.glob<string>('./theme-assets/*.webp', { query: '?url', import: 'default' });
+const characterKey = 'in-nocent-character:';
 
 function read(key: string) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -34,6 +31,16 @@ export function useTheme() {
   });
   const [muted, setMuted] = useState(() => read(muteKey) === 'true');
   const [transition, setTransition] = useState(0);
+  const anime = animeIds.find(id => id === theme);
+  const [favorites, setFavorites] = useState(() => Object.fromEntries(
+    animeIds.map(id => [id, read(characterKey + id)])) as Record<Anime, string | null>);
+  const character = anime && (animeThemes[anime].characters.find(person => person.id === favorites[anime])
+    ?? animeThemes[anime].characters[0]);
+
+  function selectCharacter(id: Anime, person: Character) {
+    setFavorites(current => ({ ...current, [id]: person.id }));
+    write(characterKey + id, person.id);
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -54,14 +61,14 @@ export function useTheme() {
     write(muteKey, String(value));
   }
 
-  return { theme, muted, transition, select, mute };
+  return { theme, anime, character, muted, transition, select, selectCharacter, mute };
 }
 
-export function ThemePicker({ theme, muted, select, mute }: ReturnType<typeof useTheme>) {
+export function ThemePicker({ theme, anime, character, muted, select, selectCharacter, mute }: ReturnType<typeof useTheme>) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [showAnime, setShowAnime] = useState(false);
   function open() {
-    setShowAnime(anime.some(id => id === theme));
+    setShowAnime(Boolean(anime));
     dialog.current?.showModal();
   }
 
@@ -81,11 +88,7 @@ export function ThemePicker({ theme, muted, select, mute }: ReturnType<typeof us
           <ThemeCard preview="anime-jjk" name="Anime Coded" expanded={showAnime} onClick={() => setShowAnime(true)}/>
           <ThemeCard preview="cute" name="Cute" active={theme === 'cute'} onClick={() => { setShowAnime(false); select('cute'); }}/>
         </div>
-        {showAnime && <fieldset className="anime-options"><legend>Choose an anime</legend>
-          <div className="theme-options">{anime.map(id =>
-            <ThemeCard key={id} preview={id} name={themes[id].name} active={theme === id} onClick={() => select(id)}/>
-          )}</div>
-        </fieldset>}
+        {showAnime && <AnimeThemeSelector active={anime} character={character} select={select} selectCharacter={selectCharacter}/>}
         <label className="theme-mute"><input type="checkbox" checked={muted} onChange={event => mute(event.target.checked)}/> Mute theme sounds</label>
       </div>
     </dialog>
@@ -101,19 +104,56 @@ function ThemeCard({ preview, name, active, expanded, onClick }: {
   </button>;
 }
 
-function CharacterScene({ id }: { id: Anime }) {
-  const { character, name, art: filename } = themes[id];
-  const [source, setSource] = useState('');
-  useEffect(() => {
-    let current = true;
-    void art['./theme-assets/' + filename]?.().then(url => { if (current) setSource(url); }).catch(() => {});
-    return () => { current = false; };
-  }, [filename]);
+function AnimeThemeSelector({ active, character, select, selectCharacter }: {
+  active?: Anime; character?: Character; select: (id: Anime) => void; selectCharacter: (id: Anime, person: Character) => void;
+}) {
+  return <>
+    <fieldset className="anime-options"><legend>Choose an anime</legend>
+      <div className="theme-options">{animeIds.map(id =>
+        <ThemeCard key={id} preview={id} name={animeThemes[id].name} active={active === id} onClick={() => select(id)}/>
+      )}</div>
+    </fieldset>
+    {active && <fieldset className="anime-options"><legend>Choose a character</legend>
+      <div className="character-options">{animeThemes[active].characters.map(person =>
+        <button key={person.id} className="theme-card character-card" type="button"
+          aria-pressed={character?.id === person.id} onClick={() => selectCharacter(active, person)}>
+          <AnimeCharacterDisplay anime={active} character={person} decorative/>
+          <span>{person.name}</span>
+        </button>
+      )}</div>
+    </fieldset>}
+  </>;
+}
+
+export function AnimeCharacterDisplay({ anime, character, decorative = false, prominent = false }: {
+  anime: Anime; character: Character; decorative?: boolean; prominent?: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  return failed
+    ? <span className="character-fallback" aria-hidden={decorative || undefined}>{decorative ? '' : character.name}</span>
+    : <img className="character-image" src={characterImage(anime, character)} alt={decorative ? '' : character.name}
+        width="256" height="256" loading={prominent ? 'eager' : 'lazy'} decoding="async" onError={() => setFailed(true)}/>;
+}
+
+function AnimeAuraEffect() {
+  return <div className="character-aura" aria-hidden="true"><i/><i/><i/></div>;
+}
+
+function CharacterScene({ anime, character }: { anime: Anime; character: Character }) {
   return <figure className="character-scene">
-    <div className="character-aura" aria-hidden="true"><i/><i/><i/></div>
-    {source ? <img src={source} alt={character} loading="lazy" decoding="async" onError={() => setSource('')}/>
-      : <figcaption><span>{name}</span><strong>{character}</strong><small>Character artwork pending</small></figcaption>}
+    <AnimeAuraEffect/>
+    <div className="character-portrait">
+      <AnimeCharacterDisplay anime={anime} character={character} prominent decorative/>
+      <figcaption>{character.name}</figcaption>
+    </div>
   </figure>;
+}
+
+export function StudyCharacter({ anime, character, pulse }: { anime: Anime; character: Character; pulse: number }) {
+  return <div className="study-character">
+    <AnimeCharacterDisplay key={character.id} anime={anime} character={character}/>
+    {pulse > 0 && <span key={pulse} className="study-aura-pulse" aria-hidden="true"/>}
+  </div>;
 }
 
 const props = [
@@ -133,11 +173,10 @@ function Sticker({ asset, label }: typeof props[number]) {
   </button>;
 }
 
-export function ThemeHero({ theme, transition }: { theme: Theme; transition: number }) {
-  const animeId = anime.find(id => id === theme);
-  return <section className={'hero' + (animeId ? ' hero-anime' : theme === 'cute' ? ' hero-cute' : '')}>
+export function ThemeHero({ theme, anime, character, transition }: Pick<ReturnType<typeof useTheme>, 'theme' | 'anime' | 'character' | 'transition'>) {
+  return <section className={'hero' + (anime ? ' hero-anime' : theme === 'cute' ? ' hero-cute' : '')}>
     <h1>Exam <em>planner</em></h1>
-    {animeId && <CharacterScene key={animeId} id={animeId}/>}
+    {anime && character && <CharacterScene key={character.id} anime={anime} character={character}/>}
     {theme === 'cute' && <div className="cute-desk">{props.map(prop => <Sticker key={prop.asset} {...prop}/>)}</div>}
     {transition > 0 && <span key={transition} className="theme-transition" aria-hidden="true"/>}
   </section>;
