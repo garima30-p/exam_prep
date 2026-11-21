@@ -9,7 +9,7 @@ import { countQuestions } from '../server/page-text.mjs';
 import { documentComplete } from './document-state';
 import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
-import { playThemeSound } from './theme-sound';
+import { ThemeHero, ThemePicker, useTheme } from './themes';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
@@ -18,37 +18,6 @@ const familiarityLabels={unknown:'Unspecified',scratch:'Starting from scratch',f
 const preparationLabels={completed:'Checkpoints completed',revision:'Needs revision','in-progress':'In progress','not-started':'Not started'};
 type Page = 'pricing'|'privacy'|'terms';
 type Message = {role:'You'|'Demo coach'|'Study coach'; text:string; source?:Source};
-
-const themes = {simple:'Simple', anime:'JJK-inspired', soft:'Cute'} as const;
-type Theme = keyof typeof themes;
-const themeKey = 'in-nocent-theme';
-
-function savedTheme(): Theme {
-  try {
-    const value = localStorage.getItem(themeKey);
-    if (value === 'anime' || value === 'soft') return value;
-  } catch { /* Storage may be unavailable. */ }
-  return 'simple';
-}
-
-function ThemeScene({theme}:{theme:'anime'|'soft'}) {
-  const anime=theme==='anime';
-  return <div className="theme-scene">
-    {anime
-      ? <div className="scene-props storm-props">
-          <span className="storm-bolt" aria-hidden="true"/>
-          <div className="gojo" role="img" aria-label="Satoru Gojo"><span className="gojo-face"/><span className="gojo-hair"/><span className="gojo-blindfold"/></div>
-          <span className="storm-bolt storm-bolt-small" aria-hidden="true"/>
-        </div>
-      : <div className="scene-props cute-props" aria-hidden="true">
-          <span className="cute-prop">🧋</span>
-          <span className="cute-prop">🐈</span>
-          <span className="cute-prop cute-fidget"><i/><i/><i/><i/></span>
-          <span className="cute-prop">🐱</span>
-          <span className="cute-prop">🧸</span>
-        </div>}
-  </div>;
-}
 
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
   const paths = {
@@ -62,17 +31,7 @@ function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
 }
 
 export function App({api=demoApi}:{api?:ExamApi}) {
-  const [theme,setTheme]=useState(savedTheme);
-  function selectTheme(next:Theme) {
-    setTheme(next);
-    if (next!=='simple') void playThemeSound(next).catch(()=>{ /* Theme selection also works without audio. */ });
-  }
-  useEffect(()=>{
-    document.documentElement.dataset.theme=theme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content',
-      getComputedStyle(document.documentElement).backgroundColor);
-    try { localStorage.setItem(themeKey,theme); } catch { /* Theme still applies for this session. */ }
-  },[theme]);
+  const theme = useTheme();
   const [exampleMode,setExampleMode]=useState(false);
   const activeApi=exampleMode?demoApi:api;
   const sampleMode=activeApi===demoApi;
@@ -259,15 +218,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   return <>
     <header className="top"><div className="wrap header-inner">
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
-      <label className="theme-picker"><span>Theme</span><select value={theme} onChange={event=>selectTheme(event.target.value as Theme)}>
-        {Object.entries(themes).map(([value,label])=><option key={value} value={value}>{label}</option>)}
-      </select></label>
+      <ThemePicker {...theme}/>
     </div></header>
     <main id="main" className={'wrap '+(result?'workspace':'landing')}>
-      <section className="hero">
-        <h1>Exam <em>planner</em></h1>
-        {theme!=='simple'&&<ThemeScene key={theme} theme={theme}/>}
-      </section>
+      <ThemeHero theme={theme.theme} transition={theme.transition}/>
       <section aria-label="Exam setup" className="setup">
         <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
           <label htmlFor="prompt">Exam details</label>

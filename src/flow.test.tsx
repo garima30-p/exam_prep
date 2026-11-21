@@ -24,7 +24,7 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     Object.defineProperty(picker,'files',{value:[new File(['fixture'],'DBMS_PYQ.pdf',{type:'application/pdf'})]});
     await act(async()=>picker.dispatchEvent(new Event('change',{bubbles:true})));
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Type for DBMS_PYQ.pdf"]')?.value).toBe('Past paper');
-    await act(async()=>host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     expect(host.textContent).toContain('How much time do you have to study?');
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('#time')!,'5 hours'));
     await act(async()=>host.querySelector('#time')!.closest('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
