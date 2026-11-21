@@ -1,0 +1,172 @@
+{
+  "name": "Synthetic OS chronology",
+  "synthetic": true,
+  "minutes": 50,
+  "familiarity": "unknown",
+  "holdouts": [
+    "os-2023"
+  ],
+  "papers": [
+    {
+      "id": "os-2021",
+      "date": "2021-06-10",
+      "material": {
+        "name": "os-2021.pdf",
+        "pages": [
+          {
+            "number": 1,
+            "text": "Section A\nQ1. Explain the role of virtual memory. [10]\nQ2. Explain binary semaphores. [5]\nQ3. Explain advantages of virtual memory. [5]"
+          }
+        ]
+      },
+      "items": [
+        {
+          "page": 1,
+          "number": "1",
+          "concept": "vm-role"
+        },
+        {
+          "page": 1,
+          "number": "2",
+          "concept": "semaphore"
+        },
+        {
+          "page": 1,
+          "number": "3",
+          "concept": "vm-advantages"
+        }
+      ]
+    },
+    {
+      "id": "os-2022",
+      "date": "2022-06-10",
+      "material": {
+        "name": "os-2022.pdf",
+        "pages": [
+          {
+            "number": 1,
+            "text": "Section A\nQ1. Describe the purpose of virtual memory. [10]\nQ2. Explain binary semaphores. [5]\nQ3. Explain disadvantages of virtual memory. [5]\nQ4. Describe the purpose of virtual memory. [10]"
+          }
+        ]
+      },
+      "items": [
+        {
+          "page": 1,
+          "number": "1",
+          "concept": "vm-role"
+        },
+        {
+          "page": 1,
+          "number": "2",
+          "concept": "semaphore"
+        },
+        {
+          "page": 1,
+          "number": "3",
+          "concept": "vm-disadvantages"
+        },
+        {
+          "page": 1,
+          "number": "4",
+          "concept": "vm-role"
+        }
+      ]
+    },
+    {
+      "id": "os-2023",
+      "date": "2023-06-10",
+      "sections": [
+        {
+          "id": "A",
+          "answer": 1
+        },
+        {
+          "id": "B",
+          "answer": 1
+        }
+      ],
+      "material": {
+        "name": "os-2023.pdf",
+        "pages": [
+          {
+            "number": 1,
+            "text": "Section A\nQ1. Explain what virtual memory is used for. [10]\nSection B\nQ2. Explain binary semaphores. [5]\nQ3. Describe a page replacement algorithm. [5]"
+          }
+        ]
+      },
+      "items": [
+        {
+          "page": 1,
+          "number": "1",
+          "concept": "vm-role",
+          "question": "Explain what virtual memory is used for.",
+          "marks": 10,
+          "section": "A",
+          "required": true
+        },
+        {
+          "page": 1,
+          "number": "2",
+          "concept": "semaphore",
+          "question": "Explain binary semaphores.",
+          "marks": 5,
+          "section": "B"
+        },
+        {
+          "page": 1,
+          "number": "3",
+          "concept": "replacement",
+          "question": "Describe a page replacement algorithm.",
+          "marks": 5,
+          "section": "B"
+        }
+      ]
+    },
+    {
+      "id": "os-2024",
+      "date": "2024-06-10",
+      "material": {
+        "name": "os-2024.pdf",
+        "pages": [
+          {
+            "number": 1,
+            "text": "Section A\nQ1. Explain an unseen future topic. [99]"
+          }
+        ]
+      },
+      "items": [
+        {
+          "page": 1,
+          "number": "1",
+          "concept": "future"
+        }
+      ]
+    }
+  ],
+  "syllabi": [
+    {
+      "availableOn": "2020-01-01",
+      "material": {
+        "name": "syllabus-2020.pdf",
+        "pages": [
+          {
+            "number": 1,
+            "text": "Unit II: Virtual memory\nUnit III: Binary semaphores"
+          }
+        ]
+      }
+    },
+    {
+      "availableOn": "2024-01-01",
+      "material": {
+        "name": "future-syllabus.pdf",
+        "pages": [
+          {
+            "number": 1,
+            "text": "Unit IX: Unseen future topic"
+          }
+        ]
+      }
+    }
+  ]
+}

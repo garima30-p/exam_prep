@@ -1,0 +1,816 @@
+{
+  "dataset": "Synthetic OS chronology",
+  "synthetic": true,
+  "reports": [
+    {
+      "holdout": "os-2023",
+      "cutoff": "2023-06-10",
+      "training": [
+        "os-2021",
+        "os-2022"
+      ],
+      "syllabus": "syllabus-2020.pdf",
+      "mode": "semantic",
+      "fallback": null,
+      "grouping": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "tn": 9,
+        "labeledCandidates": 5,
+        "precision": 1,
+        "recall": 1
+      },
+      "review": [
+        {
+          "left": {
+            "id": 1,
+            "question": "Explain binary semaphores.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:3",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "2",
+                "excerpt": "Q2. Explain binary semaphores. [5]"
+              },
+              {
+                "id": "1:1:3",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "2",
+                "excerpt": "Q2. Explain binary semaphores. [5]"
+              }
+            ]
+          },
+          "right": {
+            "id": 7,
+            "question": "Explain Binary semaphores.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "2:1:2",
+                "file": "syllabus-2020.pdf",
+                "page": 1,
+                "number": "Line 2",
+                "excerpt": "Unit III: Binary semaphores"
+              }
+            ]
+          },
+          "similarity": 1,
+          "decision": "eligible",
+          "familyId": 1,
+          "label": "unlabeled"
+        },
+        {
+          "left": {
+            "id": 2,
+            "question": "Describe the purpose of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:2",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Describe the purpose of virtual memory. [10]"
+              },
+              {
+                "id": "1:1:5",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "4",
+                "excerpt": "Q4. Describe the purpose of virtual memory. [10]"
+              }
+            ]
+          },
+          "right": {
+            "id": 3,
+            "question": "Explain the role of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:2",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Explain the role of virtual memory. [10]"
+              }
+            ]
+          },
+          "similarity": 0.9423809904620698,
+          "decision": "eligible",
+          "familyId": 2,
+          "label": "equivalent"
+        },
+        {
+          "left": {
+            "id": 2,
+            "question": "Describe the purpose of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:2",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Describe the purpose of virtual memory. [10]"
+              },
+              {
+                "id": "1:1:5",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "4",
+                "excerpt": "Q4. Describe the purpose of virtual memory. [10]"
+              }
+            ]
+          },
+          "right": {
+            "id": 4,
+            "question": "Explain disadvantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:4",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain disadvantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "similarity": 0.8623147762238275,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "different"
+        },
+        {
+          "left": {
+            "id": 2,
+            "question": "Describe the purpose of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:2",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Describe the purpose of virtual memory. [10]"
+              },
+              {
+                "id": "1:1:5",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "4",
+                "excerpt": "Q4. Describe the purpose of virtual memory. [10]"
+              }
+            ]
+          },
+          "right": {
+            "id": 5,
+            "question": "Explain advantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:4",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain advantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "similarity": 0.9138097195902588,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "different"
+        },
+        {
+          "left": {
+            "id": 2,
+            "question": "Describe the purpose of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:2",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Describe the purpose of virtual memory. [10]"
+              },
+              {
+                "id": "1:1:5",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "4",
+                "excerpt": "Q4. Describe the purpose of virtual memory. [10]"
+              }
+            ]
+          },
+          "right": {
+            "id": 6,
+            "question": "Explain Virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "2:1:1",
+                "file": "syllabus-2020.pdf",
+                "page": 1,
+                "number": "Line 1",
+                "excerpt": "Unit II: Virtual memory"
+              }
+            ]
+          },
+          "similarity": 0.9153699414286002,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "unlabeled"
+        },
+        {
+          "left": {
+            "id": 3,
+            "question": "Explain the role of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:2",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Explain the role of virtual memory. [10]"
+              }
+            ]
+          },
+          "right": {
+            "id": 4,
+            "question": "Explain disadvantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:4",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain disadvantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "similarity": 0.8538848542511754,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "different"
+        },
+        {
+          "left": {
+            "id": 3,
+            "question": "Explain the role of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:2",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Explain the role of virtual memory. [10]"
+              }
+            ]
+          },
+          "right": {
+            "id": 5,
+            "question": "Explain advantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:4",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain advantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "similarity": 0.8954207565702158,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "different"
+        },
+        {
+          "left": {
+            "id": 3,
+            "question": "Explain the role of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:2",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "1",
+                "excerpt": "Q1. Explain the role of virtual memory. [10]"
+              }
+            ]
+          },
+          "right": {
+            "id": 6,
+            "question": "Explain Virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "2:1:1",
+                "file": "syllabus-2020.pdf",
+                "page": 1,
+                "number": "Line 1",
+                "excerpt": "Unit II: Virtual memory"
+              }
+            ]
+          },
+          "similarity": 0.9410623447756458,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "unlabeled"
+        },
+        {
+          "left": {
+            "id": 4,
+            "question": "Explain disadvantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:4",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain disadvantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "right": {
+            "id": 5,
+            "question": "Explain advantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:4",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain advantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "similarity": 0.9513518287915333,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "different"
+        },
+        {
+          "left": {
+            "id": 4,
+            "question": "Explain disadvantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "1:1:4",
+                "file": "os-2022.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain disadvantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "right": {
+            "id": 6,
+            "question": "Explain Virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "2:1:1",
+                "file": "syllabus-2020.pdf",
+                "page": 1,
+                "number": "Line 1",
+                "excerpt": "Unit II: Virtual memory"
+              }
+            ]
+          },
+          "similarity": 0.8402367292561643,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "unlabeled"
+        },
+        {
+          "left": {
+            "id": 5,
+            "question": "Explain advantages of virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "0:1:4",
+                "file": "os-2021.pdf",
+                "page": 1,
+                "number": "3",
+                "excerpt": "Q3. Explain advantages of virtual memory. [5]"
+              }
+            ]
+          },
+          "right": {
+            "id": 6,
+            "question": "Explain Virtual memory.",
+            "type": "explanation",
+            "sources": [
+              {
+                "id": "2:1:1",
+                "file": "syllabus-2020.pdf",
+                "page": 1,
+                "number": "Line 1",
+                "excerpt": "Unit II: Virtual memory"
+              }
+            ]
+          },
+          "similarity": 0.8811699447295933,
+          "decision": "different-wording-scope",
+          "familyId": null,
+          "label": "unlabeled"
+        }
+      ],
+      "plans": {
+        "exactRanking": {
+          "questions": [
+            {
+              "id": 1,
+              "question": "Explain binary semaphores.",
+              "sources": [
+                {
+                  "id": "0:1:3",
+                  "file": "os-2021.pdf",
+                  "page": 1,
+                  "number": "2",
+                  "excerpt": "Q2. Explain binary semaphores. [5]"
+                },
+                {
+                  "id": "1:1:3",
+                  "file": "os-2022.pdf",
+                  "page": 1,
+                  "number": "2",
+                  "excerpt": "Q2. Explain binary semaphores. [5]"
+                }
+              ]
+            }
+          ],
+          "exactMatches": 1,
+          "equivalentMatches": 0,
+          "heldOutQuestions": 3,
+          "annotatedHeldOutQuestions": 3,
+          "weightedSyllabusCovered": 2,
+          "weightedSyllabusAvailable": 3.5,
+          "estimatedPreparationMinutes": 23,
+          "citations": {
+            "valid": 2,
+            "total": 2,
+            "accuracy": 1
+          },
+          "sections": [
+            {
+              "section": "A",
+              "compulsory": true,
+              "answer": 1,
+              "required": 1,
+              "requiredMatched": 0,
+              "coveredQuestions": 0,
+              "satisfied": false,
+              "knownMarksCovered": 0,
+              "knownMarksAvailable": 10,
+              "allMarksKnown": true
+            },
+            {
+              "section": "B",
+              "compulsory": false,
+              "answer": 1,
+              "required": 0,
+              "requiredMatched": 0,
+              "coveredQuestions": 1,
+              "satisfied": true,
+              "knownMarksCovered": 5,
+              "knownMarksAvailable": 5,
+              "allMarksKnown": true
+            }
+          ],
+          "knownMarksCovered": 5,
+          "knownMarksAvailable": 15,
+          "marksCoverage": 0.3333333333333333,
+          "compulsorySections": {
+            "covered": 0,
+            "total": 1
+          },
+          "uncovered": [
+            {
+              "number": "1",
+              "section": "A",
+              "concept": "vm-role",
+              "question": "Explain what virtual memory is used for."
+            },
+            {
+              "number": "3",
+              "section": "B",
+              "concept": "replacement",
+              "question": "Describe a page replacement algorithm."
+            }
+          ]
+        },
+        "semanticRanking": {
+          "questions": [
+            {
+              "id": 2,
+              "question": "Describe the purpose of virtual memory.",
+              "sources": [
+                {
+                  "id": "1:1:2",
+                  "file": "os-2022.pdf",
+                  "page": 1,
+                  "number": "1",
+                  "excerpt": "Q1. Describe the purpose of virtual memory. [10]"
+                },
+                {
+                  "id": "1:1:5",
+                  "file": "os-2022.pdf",
+                  "page": 1,
+                  "number": "4",
+                  "excerpt": "Q4. Describe the purpose of virtual memory. [10]"
+                },
+                {
+                  "id": "0:1:2",
+                  "file": "os-2021.pdf",
+                  "page": 1,
+                  "number": "1",
+                  "excerpt": "Q1. Explain the role of virtual memory. [10]"
+                }
+              ]
+            }
+          ],
+          "exactMatches": 0,
+          "equivalentMatches": 1,
+          "heldOutQuestions": 3,
+          "annotatedHeldOutQuestions": 3,
+          "weightedSyllabusCovered": 1.5,
+          "weightedSyllabusAvailable": 3.5,
+          "estimatedPreparationMinutes": 32,
+          "citations": {
+            "valid": 3,
+            "total": 3,
+            "accuracy": 1
+          },
+          "sections": [
+            {
+              "section": "A",
+              "compulsory": true,
+              "answer": 1,
+              "required": 1,
+              "requiredMatched": 1,
+              "coveredQuestions": 1,
+              "satisfied": true,
+              "knownMarksCovered": 10,
+              "knownMarksAvailable": 10,
+              "allMarksKnown": true
+            },
+            {
+              "section": "B",
+              "compulsory": false,
+              "answer": 1,
+              "required": 0,
+              "requiredMatched": 0,
+              "coveredQuestions": 0,
+              "satisfied": false,
+              "knownMarksCovered": 0,
+              "knownMarksAvailable": 5,
+              "allMarksKnown": true
+            }
+          ],
+          "knownMarksCovered": 10,
+          "knownMarksAvailable": 15,
+          "marksCoverage": 0.6666666666666666,
+          "compulsorySections": {
+            "covered": 1,
+            "total": 1
+          },
+          "uncovered": [
+            {
+              "number": "2",
+              "section": "B",
+              "concept": "semaphore",
+              "question": "Explain binary semaphores."
+            },
+            {
+              "number": "3",
+              "section": "B",
+              "concept": "replacement",
+              "question": "Describe a page replacement algorithm."
+            }
+          ]
+        },
+        "semanticOptimized": {
+          "questions": [
+            {
+              "id": 2,
+              "question": "Describe the purpose of virtual memory.",
+              "sources": [
+                {
+                  "id": "1:1:2",
+                  "file": "os-2022.pdf",
+                  "page": 1,
+                  "number": "1",
+                  "excerpt": "Q1. Describe the purpose of virtual memory. [10]"
+                },
+                {
+                  "id": "1:1:5",
+                  "file": "os-2022.pdf",
+                  "page": 1,
+                  "number": "4",
+                  "excerpt": "Q4. Describe the purpose of virtual memory. [10]"
+                },
+                {
+                  "id": "0:1:2",
+                  "file": "os-2021.pdf",
+                  "page": 1,
+                  "number": "1",
+                  "excerpt": "Q1. Explain the role of virtual memory. [10]"
+                }
+              ]
+            }
+          ],
+          "exactMatches": 0,
+          "equivalentMatches": 1,
+          "heldOutQuestions": 3,
+          "annotatedHeldOutQuestions": 3,
+          "weightedSyllabusCovered": 1.5,
+          "weightedSyllabusAvailable": 3.5,
+          "estimatedPreparationMinutes": 32,
+          "citations": {
+            "valid": 3,
+            "total": 3,
+            "accuracy": 1
+          },
+          "sections": [
+            {
+              "section": "A",
+              "compulsory": true,
+              "answer": 1,
+              "required": 1,
+              "requiredMatched": 1,
+              "coveredQuestions": 1,
+              "satisfied": true,
+              "knownMarksCovered": 10,
+              "knownMarksAvailable": 10,
+              "allMarksKnown": true
+            },
+            {
+              "section": "B",
+              "compulsory": false,
+              "answer": 1,
+              "required": 0,
+              "requiredMatched": 0,
+              "coveredQuestions": 0,
+              "satisfied": false,
+              "knownMarksCovered": 0,
+              "knownMarksAvailable": 5,
+              "allMarksKnown": true
+            }
+          ],
+          "knownMarksCovered": 10,
+          "knownMarksAvailable": 15,
+          "marksCoverage": 0.6666666666666666,
+          "compulsorySections": {
+            "covered": 1,
+            "total": 1
+          },
+          "uncovered": [
+            {
+              "number": "2",
+              "section": "B",
+              "concept": "semaphore",
+              "question": "Explain binary semaphores."
+            },
+            {
+              "number": "3",
+              "section": "B",
+              "concept": "replacement",
+              "question": "Describe a page replacement algorithm."
+            }
+          ],
+          "warnings": []
+        },
+        "repeatedOnly": {
+          "questions": [
+            {
+              "id": 1,
+              "question": "Explain binary semaphores.",
+              "sources": [
+                {
+                  "id": "0:1:3",
+                  "file": "os-2021.pdf",
+                  "page": 1,
+                  "number": "2",
+                  "excerpt": "Q2. Explain binary semaphores. [5]"
+                },
+                {
+                  "id": "1:1:3",
+                  "file": "os-2022.pdf",
+                  "page": 1,
+                  "number": "2",
+                  "excerpt": "Q2. Explain binary semaphores. [5]"
+                }
+              ]
+            }
+          ],
+          "exactMatches": 1,
+          "equivalentMatches": 0,
+          "heldOutQuestions": 3,
+          "annotatedHeldOutQuestions": 3,
+          "weightedSyllabusCovered": 2,
+          "weightedSyllabusAvailable": 3.5,
+          "estimatedPreparationMinutes": 23,
+          "citations": {
+            "valid": 2,
+            "total": 2,
+            "accuracy": 1
+          },
+          "sections": [
+            {
+              "section": "A",
+              "compulsory": true,
+              "answer": 1,
+              "required": 1,
+              "requiredMatched": 0,
+              "coveredQuestions": 0,
+              "satisfied": false,
+              "knownMarksCovered": 0,
+              "knownMarksAvailable": 10,
+              "allMarksKnown": true
+            },
+            {
+              "section": "B",
+              "compulsory": false,
+              "answer": 1,
+              "required": 0,
+              "requiredMatched": 0,
+              "coveredQuestions": 1,
+              "satisfied": true,
+              "knownMarksCovered": 5,
+              "knownMarksAvailable": 5,
+              "allMarksKnown": true
+            }
+          ],
+          "knownMarksCovered": 5,
+          "knownMarksAvailable": 15,
+          "marksCoverage": 0.3333333333333333,
+          "compulsorySections": {
+            "covered": 0,
+            "total": 1
+          },
+          "uncovered": [
+            {
+              "number": "1",
+              "section": "A",
+              "concept": "vm-role",
+              "question": "Explain what virtual memory is used for."
+            },
+            {
+              "number": "3",
+              "section": "B",
+              "concept": "replacement",
+              "question": "Describe a page replacement algorithm."
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "performance": {
+    "model": "Xenova/all-MiniLM-L6-v2",
+    "revision": "6fa4bf687ce79106377b66d10009c0e513715e24",
+    "node": "v24.11.1",
+    "platform": "win32",
+    "architecture": "x64",
+    "firstRunMs": 207,
+    "warmCacheMs": 0.033,
+    "rssBaselineBytes": 54951936,
+    "rssPeakBytes": 149262336,
+    "artifacts": [
+      {
+        "file": "config.json",
+        "bytes": 650
+      },
+      {
+        "file": "model_quantized.onnx",
+        "bytes": 22972370
+      },
+      {
+        "file": "tokenizer.json",
+        "bytes": 711661
+      },
+      {
+        "file": "tokenizer_config.json",
+        "bytes": 366
+      }
+    ],
+    "artifactBytes": 23685047
+  }
+}

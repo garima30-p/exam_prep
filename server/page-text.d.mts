@@ -1,0 +1,11 @@
+export type Reading = {text:string;confidence:number|null;variant:string};
+export type PageQuality = {status:'extracted'|'review'|'failed';questions:number;score:number;reason:string};
+export function pageQuality(text:string,kind:string,confidence?:number|null):PageQuality;
+export function chooseReading<T extends Reading>(current:T|null,next:T,kind:string):T;
+export function countQuestions(text:string,pastPaper?:boolean):number;
+export function countSupportedOcrQuestions(text:string,pastPaper:boolean):number;
+export function formatPageText(text:string,kind:string):string;
+export function findGutter(image:{data:Uint8ClampedArray;width:number;height:number}):number|null;
+export function scanScale(width:number,height:number,pixelBudget?:number):number;
+export function scanPasses(width:number,height:number,manual?:boolean):{rotation:number;filter:'raw'|'contrast'|'binary';layout:'auto'|'column'}[];
+export function enhanceScan<T extends {data:Uint8ClampedArray}>(image:T,binary?:boolean):T;

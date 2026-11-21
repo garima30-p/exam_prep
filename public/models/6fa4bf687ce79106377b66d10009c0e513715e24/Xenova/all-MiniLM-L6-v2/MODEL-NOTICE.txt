@@ -1,0 +1,5 @@
+Xenova/all-MiniLM-L6-v2, q8 ONNX conversion of sentence-transformers/all-MiniLM-L6-v2.
+Pinned model revision: 6fa4bf687ce79106377b66d10009c0e513715e24.
+Upstream model card: https://huggingface.co/Xenova/all-MiniLM-L6-v2/blob/6fa4bf687ce79106377b66d10009c0e513715e24/README.md
+Base model card: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+Redistributed under Apache License 2.0. See LICENSE.
