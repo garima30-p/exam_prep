@@ -18,7 +18,7 @@ const preparationLabels={completed:'Checkpoints completed',revision:'Needs revis
 type Page = 'pricing'|'privacy'|'terms';
 type Message = {role:'You'|'Demo coach'|'Study coach'; text:string; source?:Source};
 
-const themes = {simple:'Simple', anime:'JJK-inspired', soft:'Thai GL-inspired'} as const;
+const themes = {simple:'Simple', anime:'JJK-inspired', soft:'Cute'} as const;
 type Theme = keyof typeof themes;
 const themeKey = 'in-nocent-theme';
 
@@ -241,7 +241,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </div></header>
     <main id="main" className={'wrap '+(result?'workspace':'landing')}>
       <section className="hero">
+        {theme==='anime'&&<div className="gojo" role="img" aria-label="Satoru Gojo"><span className="gojo-face"/><span className="gojo-hair"/><span className="gojo-blindfold"/></div>}
         <h1>Exam <em>planner</em></h1>
+        {theme==='soft'&&<div className="theme-kitties" aria-hidden="true"><span>🐱</span><span>🐈</span><span>🐈‍⬛</span></div>}
       </section>
       <section aria-label="Exam setup" className="setup">
         <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>

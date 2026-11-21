@@ -71,6 +71,15 @@ button:disabled{opacity:.55;cursor:default}
 [data-theme="anime"] .hero h1{font-weight:850;letter-spacing:-.08em}
 [data-theme="soft"] .hero h1{font-family:Georgia,serif;font-weight:400;letter-spacing:-.045em}
 [data-theme="soft"] .hero em{font-style:italic}
+.theme-kitties{display:flex;justify-content:center;align-items:center;gap:.75rem;margin-top:.65rem;font-size:1.15rem}
+.theme-kitties span:first-child{transform:rotate(-10deg)}
+.theme-kitties span:last-child{transform:rotate(10deg)}
+.gojo{position:relative;isolation:isolate;width:66px;height:66px;margin:0 auto .6rem;overflow:hidden;border:1px solid #a57bdd;border-radius:50%;background:radial-gradient(circle,#6a40a5,#2b1b43)}
+.gojo::before,.gojo span{position:absolute;display:block}
+.gojo::before{content:"";inset:43px 8px -6px;border-radius:48% 48% 0 0;background:#181625}
+.gojo-face{inset:17px 18px 14px;border-radius:35% 35% 50% 50%;background:#f0cbbb}
+.gojo-hair{inset:5px 10px 33px;background:linear-gradient(130deg,#fff,#cccde8);clip-path:polygon(0 75%,14% 39%,8% 20%,31% 23%,43% 0,54% 19%,75% 4%,74% 22%,95% 18%,88% 40%,100% 62%,81% 58%,88% 87%,66% 69%,54% 100%,47% 73%,24% 99%,28% 74%)}
+.gojo-blindfold{inset:29px 16px 25px;border-radius:4px;background:#171421;transform:rotate(-5deg)}
 .theme-picker{font-size:.85rem;color:var(--muted);font-weight:650}
 .theme-picker select{width:auto;min-height:40px}
 .footer{justify-content:center}
