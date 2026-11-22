@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { demoApi, duration, fitQuestions, materialType } from './api';
@@ -11,7 +11,7 @@ import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
 import { acceptedDocuments, documentFormat, documentLocation, originalDocumentLink } from './document-formats';
 import { StudyCharacter, ThemeHero, ThemePicker, useTheme } from './themes';
-import { answerLines, buildStudyPack, familiarityLabels, sourceLabel } from './study-pack';
+import { buildStudyPack, familiarityLabels, sourceLabel } from './study-pack';
 import { DownloadStudyPack } from './study-output';
 import { revise, revisionFromAnswer } from './revision';
 import type { Revision } from './revision';
@@ -53,27 +53,24 @@ function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'|'menu'}) {
   return <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]}/></svg>;
 }
 
-function coachInline(text:string) {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part,index)=>{
-    if(part.startsWith('`')&&part.endsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;
-    if(part.startsWith('**')&&part.endsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;
-    return part;
-  });
-}
+const StudyMarkdown=lazy(()=>import('./study-markdown'));
+
 function CoachAnswer({text}:{text:string}) {
-  return <div className="coach-answer">{text.split(/(```[\s\S]*?```)/).flatMap((part,index)=>{
-    if(part.startsWith('```')&&part.endsWith('```'))return <pre key={index}><code>{part.slice(3,-3).replace(/^[-\w]*\r?\n/,'').trimEnd()}</code></pre>;
-    return part.trim().split(/\n\s*\n/).filter(Boolean).map((block,blockIndex)=>{
-      const key=index+'-'+blockIndex;
-      const lines=block.split('\n');
-      if(/^#{1,4}\s+/.test(lines[0]))return <div key={key}><h3>{coachInline(lines[0].replace(/^#{1,4}\s+/,''))}</h3>{lines.length>1&&<p>{coachInline(lines.slice(1).join('\n'))}</p>}</div>;
-      if(lines.every(line=>/^\s*[-*]\s+/.test(line)))return <ul key={key}>{lines.map((line,i)=>
-        <li key={i}>{coachInline(line.replace(/^\s*[-*]\s+/,''))}</li>)}</ul>;
-      if(lines.every(line=>/^\s*\d+[.)]\s+/.test(line)))return <ol key={key}>{lines.map((line,i)=>
-        <li key={i}>{coachInline(line.replace(/^\s*\d+[.)]\s+/,''))}</li>)}</ol>;
-      return <p key={key}>{coachInline(block)}</p>;
-    });
-  })}</div>;
+  return <Suspense fallback={<p role="status">Loading study content…</p>}><StudyMarkdown text={text}/></Suspense>;
+}
+
+function SourceStatus({references,openSource,generated=true}:{
+  references:readonly CoachSource[];openSource:(source:Source)=>void;generated?:boolean;
+}) {
+  if(!generated&&!references.length)return null;
+  return <div className="source-status">
+    {generated&&<small>{references.length?'AI-generated':'AI-generated · Not source-verified'}</small>}
+    {references.length>0&&<details><summary>Sources ({references.length})</summary>
+      {references.map(reference=>reference.kind==='uploaded'
+        ?<button key={reference.id} className="link accent source" onClick={()=>openSource(reference)}>{sourceLabel(reference)}</button>
+        :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}
+    </details>}
+  </div>;
 }
 
 export function App({api=demoApi}:{api?:ExamApi}) {
@@ -141,7 +138,41 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const timeAnchor=useRef(Date.now());
   const [messages,setMessages]=useState<Message[]>([]);
   const chatLog=useRef<HTMLDivElement>(null);
-  useEffect(()=>{if(chatLog.current)chatLog.current.scrollTop=0;},[messages]);
+  const chatTranscript=useRef<HTMLDivElement>(null);
+  const followChat=useRef(true);
+  const [showLatest,setShowLatest]=useState(false);
+  const coachSection=useRef<HTMLElement>(null);
+  function scrollChatToLatest(){
+    followChat.current=true;
+    if(chatLog.current)chatLog.current.scrollTop=chatLog.current.scrollHeight;
+    setShowLatest(false);
+  }
+  useLayoutEffect(()=>{
+    if(coachPage&&followChat.current)scrollChatToLatest();
+  },[coachPage,messages]);
+  useLayoutEffect(()=>{
+    if(!coachPage||!chatTranscript.current||typeof ResizeObserver!=='function')return;
+    const observer=new ResizeObserver(()=>{
+      if(followChat.current)scrollChatToLatest();
+    });
+    observer.observe(chatTranscript.current);
+    return ()=>observer.disconnect();
+  },[coachPage]);
+  useLayoutEffect(()=>{
+    if(!coachPage)return;
+    const viewport=window.visualViewport;
+    const section=coachSection.current;
+    if(!viewport||!section)return;
+    // The mobile keyboard can shrink the visual viewport without resizing the layout viewport.
+    const resize=()=>{
+      const top=section.getBoundingClientRect().top+window.scrollY;
+      section.style.setProperty('--coach-available-height',Math.max(140,viewport.height-top)+'px');
+      if(followChat.current)scrollChatToLatest();
+    };
+    resize();
+    viewport.addEventListener('resize',resize);
+    return ()=>viewport.removeEventListener('resize',resize);
+  },[coachPage]);
   const [chat,setChat]=useState('');
   const [coachPending,setCoachPending]=useState(false);
   const [coachPagePrompt,setCoachPagePrompt]=useState(false);
@@ -155,6 +186,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const nextFile=useRef(0);
   const input=useRef<HTMLInputElement>(null);
   const dialog=useRef<HTMLDialogElement>(null);
+  const infoDialog=useRef<HTMLDialogElement>(null);
+  const workspaceInput=useRef<HTMLTextAreaElement>(null);
   useEffect(()=>()=>{controller.current?.abort();bookRequest.current?.abort();},[]);
   useEffect(()=>{
     if(!drawerOpen)return;
@@ -298,6 +331,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         setResult(analysis.questions);setWarnings(analysis.warnings);
         setOptimization(analysis.optimization?{data:analysis.optimization}:null);
         setProgress(runProgress);
+        setEditing(false);
         return;
       }
       const scope=prepareScope(analysis,adjusted,runProgress);
@@ -321,6 +355,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
           if(!response.ok||!data.explanation?.trim()){
             if(data.code==='subject_required')setNeedsSubject(true);
+            else if(data.code==='citation_validation_failed')setNotice('The summary’s sources could not be verified. Try generating it again.');
             else setNotice(data.code==='usage_limit'?'The AI usage limit has been reached. Try again later.':'AI generation failed. Please retry.');
             return;
           }
@@ -431,6 +466,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
     if(sampleMode&&!reply)reply=activeApi.chat(text,visible.map((question,index)=>({...question,id:index+1})));
     const message:Message={role:sampleMode?'Demo coach':'in-nocent',text:reply??'',pending:!reply};
+    followChat.current=true;
     setMessages(current=>[...current,{role:'You',text},message]);setChat('');
     if(reply)return;
 
@@ -550,26 +586,40 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const allocation=mode==='study'?0:shortReview?reviewAllocations[q.id]:(sampleMode||plannedIds.has(q.id)?effort?.minutes??q.minutes:0);
     const answerKey=JSON.stringify([context.subject,q.prompt,q.answerSource??null,q.sources??[q.source]]);
     const answer=questionAnswers[answerKey];
+    const evidence=q.sources??[q.source];
+    const availableEvidence=evidence.filter(reference=>reference.file);
+    const kind=q.historical?'Previous-Year Question':evidence.some(source=>files.some(file=>file.id===source.documentIndex&&file.kind==='Past paper'))
+      ?'Uploaded past-paper question':practice[q.id]?'AI-Generated Practice Question':q.practiceSeed?'Recall practice':'Practice question';
     return <article className="question" key={q.id}>
-      <div className="question-meta">{index!==undefined&&<span className="rank">#{index+1}</span>}<span>{q.topic}{q.unit?' · Unit '+q.unit:''}</span><span className="spacer"/><span>{mode==='study'?'':allocation?allocation+' min'+(shortReview?' quick review':''):'Reference'}{q.marks?' · '+q.marks+' marks':''}</span></div>
-      <h3>{q.prompt}</h3><p>{q.historical?'Previous-Year Question'+(q.examYears?.length?' · '+q.examYears.join(', '):'')+' · ':q.sources?.some(source=>documents.some(doc=>doc.id===source.documentIndex&&files.some(file=>file.id===doc.id&&file.kind==='Past paper')))?'Uploaded past-paper question · ':practice[q.id]?'AI-Generated Practice Question · ':q.practiceSeed?'Recall practice · ':'Practice question · '}{q.reason}.</p>
-      {!sampleMode&&<details className="checkpoints" onToggle={event=>{if(event.currentTarget.open&&!answer)void loadQuestionAnswer(q,answerKey);}}>
+      <header className="question-meta">{index!==undefined&&<span>#{index+1}</span>}{allocation>0&&<span>{allocation} min</span>}</header>
+      <h3>{q.prompt}</h3>
+      <details className="question-answer" onToggle={event=>{if(!sampleMode&&event.currentTarget.open&&!answer)void loadQuestionAnswer(q,answerKey);}}>
         <summary>View Answer ↓</summary>
+        {sampleMode&&<CoachAnswer text={q.answer}/>}
         {answer?.pending&&<p role="status">Preparing answer…</p>}
         {answer?.error&&<><p>Couldn’t verify an answer right now. {q.answerSource?'You can still read the matching passage.':''}</p>
           <button className="link accent" onClick={()=>void loadQuestionAnswer(q,answerKey)}>Retry</button>
           {q.answerSource&&<button className="link accent" onClick={()=>open(null,q.answerSource!)}>{sourceLabel(q.answerSource)}</button>}</>}
-        {answer?.text&&<>{answer.generated&&<small>{answer.references?.length?'AI-generated':'AI-generated · Not source-verified'}</small>}<CoachAnswer text={answer.text}/>
-          {answer.references?.map(reference=>reference.kind==='uploaded'
-            ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
-            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</>}
-      </details>}
-      {(q.sources??[q.source]).map((reference,i)=><button key={i} className="link accent source" onClick={()=>open(null,reference)}><Icon name="file"/>{sourceLabel(reference)}</button>)}
+        {answer?.text&&<><CoachAnswer text={answer.text}/>
+          <SourceStatus references={answer.references??[]} generated={answer.generated} openSource={reference=>open(null,reference)}/></>}
+      </details>
+      <details className="question-info">
+        <summary aria-label="Question information">ⓘ</summary>
+        <div className="question-detail">
+          <p>{kind}{q.examYears?.length?' · '+q.examYears.join(', '):''}{q.historicalFrequency?' · '+q.historicalFrequency+' recorded appearances'+(q.historicalPaperCount?' across '+q.historicalPaperCount+' papers':''):''}</p>
+          <p>{q.topic}{q.unit?' · Unit '+q.unit:''}{q.marks?' · '+q.marks+' marks':''}</p>
+          <p>{q.reason}</p>
+          {shortReview&&<p>Use this allocation to review the method. A full answer takes longer.</p>}
+          {effort&&<p>Remaining estimate: {effort.remaining.understanding} min understanding, {effort.remaining.practice} min practice, {effort.remaining.recall} min recall.</p>}
+          {Boolean(q.learning?.prerequisites.length)&&<p>Syllabus prerequisites: {q.learning?.prerequisites.join(', ')}.</p>}
+          {availableEvidence.length>0&&<details><summary>Question evidence ({availableEvidence.length})</summary>
+            {availableEvidence.map((reference,i)=><button key={i} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>)}
+          </details>}
+        </div>
+      </details>
       {effort&&q.learning&&<details className="checkpoints">
-        <summary>{q.learning.type} · {preparationLabels[effort.status]} · {effort.completed}/{effort.total} checkpoints</summary>
-        {shortReview&&<p>Use this allocation to review the method. A full answer takes longer.</p>}
-        <p>Remaining estimate: {effort.remaining.understanding} min understanding, {effort.remaining.practice} min practice, {effort.remaining.recall} min recall.</p>
-        {q.learning.prerequisites.length>0&&<p>Syllabus prerequisites: {q.learning.prerequisites.join(', ')}.</p>}
+        <summary>Practice recall</summary>
+        <p>{q.learning.type} · {preparationLabels[effort.status]} · {effort.completed}/{effort.total} checkpoints</p>
         <ol>
           {q.learning.checkpoints.map(checkpoint=><li key={checkpoint.id}>
             <label><span>{checkpoint.text}<small>{checkpoint.label}</small></span>
@@ -610,6 +660,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     void generate(undefined,adjusted,'continue');
   }
   const hasContext=Boolean(prompt.trim() || files.length);
+  const workspaceResult=mode==='study'?Boolean(book&&activeBookPage):Boolean(result&&planGenerated);
+  const composerCollapsed=workspaceResult&&!editing&&!busy;
+  useEffect(()=>{
+    if(editing&&!coachPage)workspaceInput.current?.focus();
+  },[editing,coachPage]);
+  const reviewDocuments=documents.filter(document=>!documentComplete(document));
+  const reviewCount=reviewDocuments.reduce((sum,document)=>sum+Math.max(0,(document.total??0)-document.pages.filter(isTrusted).length),0);
+  const allReviewPages=reviewCount>0&&reviewDocuments.every(document=>document.name.toLowerCase().endsWith('.pdf')&&document.total!==null);
+  const reviewLabel=reviewDocuments.some(document=>document.total===null)?'Check unreadable files':
+    reviewCount+' '+(allReviewPages?'page':'part')+(reviewCount===1?' needs':'s need')+' review';
   const activeBookContent=activeBookPage?bookContent[activeBookPage.id]:undefined;
   const studyPageQuestions=availableQuestions(bookQuestions);
   function practiceRetry(questions:readonly Question[]){
@@ -626,7 +686,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     <header className="top"><div className="wrap header-inner">
       <div className="book-brand"><button ref={drawerToggle} type="button" className="icon-btn" aria-label="Study navigation" aria-controls="study-drawer" aria-expanded={drawerOpen} onClick={()=>setDrawerOpen(open=>!open)}><Icon name="menu"/></button>
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a></div>
-      <ThemePicker {...theme}/>
+      <div className="header-tools"><ThemePicker {...theme}/>
+        <button type="button" className="icon-btn" aria-label="Study information" onClick={()=>infoDialog.current?.showModal()}>ⓘ</button>
+      </div>
       <nav aria-label="Workspace"><a className="link" href={coachPage?'#main':'#study-coach'} onClick={event=>{
         event.preventDefault();
         openWorkspace(!coachPage);
@@ -636,30 +698,96 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     <aside ref={drawerPanel} id="study-drawer" className="study-drawer" hidden={!drawerOpen} aria-label="Study navigation">
       <div className="drawer-top"><strong>Study workspace</strong><button type="button" className="icon-btn" aria-label="Close navigation" onClick={()=>{setDrawerOpen(false);drawerToggle.current?.focus();}}><Icon name="close"/></button></div>
       {modeButtons('Preparation modes in navigation')}
-      {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}</p></div>}
+      {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}{context.minutes?' · '+context.minutes+' min':''}</p></div>}
       {book&&<nav aria-label="Table of contents"><h2>Contents</h2><ol>
         {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={mode==='study'&&!coachPage&&bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
           <span>{index+1}</span>{unit.title}</button></li>)}
       </ol></nav>}
       <button type="button" className="link accent drawer-coach" onClick={()=>openWorkspace(true)}>Study Coach</button>
     </aside>
-    <main id="main" className={'wrap '+(planGenerated?'workspace':'landing')}>
+    <main id="main" className={'wrap '+(coachPage?'coach-workspace':workspaceResult?'workspace':'landing')}>
       {!coachPage&&<>
       {modeButtons('Preparation mode')}
-      {mode==='last-minute'||!book?<ThemeHero {...theme}/>:null}
-      <section aria-label="Exam setup" className="setup">
-        <form onSubmit={event=>{if(mode==='study'){if(book){event.preventDefault();studyHeading.current?.scrollIntoView?.({block:'start'});}else void generate(event);return;}if(!planGenerated){void generate(event);return;}event.preventDefault();if(editing)setEditing(false);else resultHeading.current?.scrollIntoView?.({block:'start'});}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
+      {!workspaceResult&&<ThemeHero {...theme}/>}
+      <div className="exam-overview">
+        {(context.subject||book?.subject||context.minutes>0)&&<p className="summary">{[context.subject||book?.subject,context.minutes?context.minutes+' min available':''].filter(Boolean).join(' · ')}</p>}
+        {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
+        {!busy&&!reviewDocuments.length&&warnings.some(warning=>warning.startsWith('OCR-only'))&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ OCR evidence needs review</button>}
+        {workspaceResult&&<details className="submitted-input">
+          <summary>Your input</summary>
+          {prompt.trim()&&<p>{prompt}</p>}
+          {files.length>0&&<ul>{files.map(file=><li key={file.id}>{file.file.name}</li>)}</ul>}
+        </details>}
+      </div>
+      {mode==='last-minute' && result && planGenerated && <section className="results" aria-labelledby="results-title">
+        <div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read</h2></div>
+        {aiNote?<article className="study-note" aria-label="Revision notes">
+          <CoachAnswer text={aiNote}/>
+          <SourceStatus references={aiReferences} openSource={reference=>open(null,reference)}/>
+        </article>:sampleMode&&revision&&<article className="study-note" aria-label="Revision notes">
+          <h3>{revision.title}</h3>{revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
+          <details><summary>Show answer</summary><p>{revision.answer}</p></details>
+        </article>}
+        {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
+
+        {!showQuestions&&<button className="primary" onClick={()=>void revealQuestions()}>Generate Questions</button>}
+        {showQuestions&&<section className="results-questions" aria-labelledby="important-questions">
+          {showQuestions&&<h3 id="important-questions" ref={questionsHeading} tabIndex={-1}>Important Questions</h3>}
+          {showQuestions&&practicePending&&<p role="status">Preparing practice questions…</p>}
+
+          {showQuestions&&questionsOutsideBudget&&<p>These questions are available for reference. None fits the remaining preparation budget.</p>}
+          {showQuestions&&practiceRetry(lastMinuteQuestions)}
+          {showQuestions&&questionList.map((question,index)=>renderQuestion(question,index))}
+          {showQuestions&&!practicePending&&!questionList.length&&revision&&<article className="question">
+            <h3>{revision.recall}</h3>
+            <details className="question-answer"><summary>View Answer ↓</summary><p>{revision.answer}</p>
+              <details><summary>Sources (1)</summary><button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button></details>
+            </details>
+          </article>}
+          {showQuestions&&!practicePending&&!questionList.length&&!revision&&<p>No reliable questions are available for these topics yet.</p>}
+          {sampleMode&&showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>setLimit(current=>current+10)}>Show next 10</button>}
+          {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
+        </section>}
+      </section>}
+      {mode==='study'&&book&&activeBookPage&&<section className="study-book" aria-labelledby="book-page-title">
+        <header className="book-page-header">
+          <h2 id="book-page-title" tabIndex={-1} ref={studyHeading}>{activeBookPage.title}</h2>
+        </header>
+        {bookErrors[activeBookPage.id]?<div className="book-page-feedback"><p role="alert">{bookErrors[activeBookPage.id]}</p>
+          <button type="button" className="secondary" onClick={()=>setBookErrors(current=>{const next={...current};delete next[activeBookPage.id];return next;})}>Retry page</button>
+        </div>:activeBookContent?<article className="book-content" aria-label="Study page content">
+          <CoachAnswer text={activeBookContent.text}/>
+          {book.demo?<small>Demo</small>:<SourceStatus references={activeBookContent.references} openSource={reference=>open(null,reference)}/>}
+          {bookQuestions.length>0&&<details key={activeBookPage.id} onToggle={event=>{if(event.currentTarget.open)void preparePractice(bookQuestions);}}>
+            <summary>Generate Questions</summary>
+            {practiceRetry(bookQuestions)}
+            {studyPageQuestions.map((question,index)=>renderQuestion(question,index))}
+            {practicePending&&<p role="status">Preparing practice questions…</p>}
+            {!practicePending&&!studyPageQuestions.length&&<p>No reliable practice questions are available for this page.</p>}
+          </details>}
+          <button type="button" className="link accent" onClick={()=>{openWorkspace(true);setCoachPagePrompt(true);}}>Ask Study Coach about this page</button>
+        </article>:<p role="status" className="book-page-feedback">Preparing this page…</p>}
+        <nav className="book-pagination" aria-label="Study pages">
+          <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>← Previous</button>
+          <span className="book-page-number">Page {bookIndex+1} of {book.pages.length}</span>
+          <button type="button" className="secondary" disabled={bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1)}>Next →</button>
+        </nav>
+      </section>}
+      <section aria-label="Exam setup" className={'setup '+(composerCollapsed?'setup-collapsed':'')}>
+        {composerCollapsed?<button type="button" className="secondary" onClick={()=>setEditing(true)}>Edit input</button>:<>
+        <form onSubmit={event=>{if(workspaceResult){event.preventDefault();setEditing(false);return;}void generate(event);}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
           <label htmlFor="prompt">Paste notes or add a file</label>
-          <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="Paste a passage, or describe what you want to revise" rows={3} maxLength={8000}/>
+          <textarea ref={workspaceInput} id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="Paste a passage, or describe what you want to revise" rows={3} maxLength={8000}/>
           {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
-            <button className="primary" disabled={busy} type="submit">{mode==='study'?(busy?'Preparing your book…':book?'Open study page ↓':'Start Study'):busy?'Generating summary…':planGenerated?'Summary generated ↓':'Generate Summary'}</button>
+            <button className="primary" disabled={busy} type="submit">{workspaceResult?(mode==='study'?'Open study page ↓':'Summary generated ↓'):mode==='study'?(busy?'Preparing your book…':'Start Study'):busy?'Generating summary…':'Generate Summary'}</button>
           </div>
         </form>
+        </>}
         {notice && <p role="alert" className="notice">{notice}</p>}
-        {hasContext && <details><summary>Edit details</summary><fieldset className="context" disabled={busy}><legend>Plan settings</legend>
+        {!composerCollapsed&&hasContext && <details><summary>Edit details</summary><fieldset className="context" disabled={busy}><legend>Plan settings</legend>
           <label>Exam<input value={context.subject} placeholder="Subject" onChange={e=>update('subject',e.target.value)}/></label>
           <label>Date<input value={context.date} placeholder="Exam date" onChange={e=>update('date',e.target.value)}/></label>
           {mode==='last-minute'&&<label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>{update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))));setPlanGenerated(false);}}/></label>}
@@ -681,116 +809,69 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <label htmlFor="summary-subject">What subject should I summarize?</label>
           <div className="inline"><input id="summary-subject" value={subjectReply} maxLength={100} onChange={event=>setSubjectReply(event.target.value)}/><button className="primary" disabled={!subjectReply.trim()}>Continue</button></div>
         </form>}
-        <div className="setup-meta"><button className="link accent" type="button" disabled={busy} onClick={toggleExample}>{exampleMode?'Exit demo':'Try an example'}</button>{sampleMode?<small>Demo · Sample DBMS data</small>:hasContext&&<small>Original files stay on device. Text is sent for analysis.</small>}</div>
         {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading sample questions…':processingMessage}</p>
           {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
         </div>}
-        {!sampleMode&&activeApi.prepare&&documents.length>0&&<details className="processing-details"><summary>Document processing</summary><DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/></details>}
         {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(undefined,context,'retry')}>Retry unread files</button>}
       </section>
-      {mode==='last-minute' && result && planGenerated && !editing && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse summary">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
-        <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
-        {aiNote?<article className="study-note" aria-label="Revision notes">
-          <strong>{aiReferences.length?'AI-generated':'AI-generated · Not source-verified'}</strong>
-          {summaryWebLimited&&<p className="notice">Web sources were unavailable. {aiReferences.length?'This summary uses your uploaded material.':'This is a general explanation.'}</p>}
-          <CoachAnswer text={aiNote}/>
-          {aiReferences.length>0&&<details><summary>References used</summary>{aiReferences.map(reference=>reference.kind==='uploaded'
-            ?<button className="link accent source" key={reference.id} onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
-            :<a className="link accent source" key={reference.id} href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</details>}
-        </article>:sampleMode&&revision&&<article className="study-note" aria-label="Revision notes">
-          <h3>{revision.title}</h3>{revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
-          <details><summary>Show answer</summary><p>{revision.answer}</p></details>
-        </article>}
-        {documents.some(document=>!documentComplete(document))&&<p className="notice">Unreadable or unverified pages were excluded from the summary.</p>}
-        {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
-        <button className="secondary" onClick={()=>void revealQuestions()} disabled={showQuestions}>{practicePending?'Preparing practice questions…':showQuestions?'Questions shown':'Generate Questions'}</button>
-        <details className="study-output" open={showQuestions||undefined}><summary>More study tools</summary>
-        {pack.timeline.length>0&&<details><summary>Time breakdown</summary><ol className="study-timeline">
-          {pack.timeline.map((item,index)=><li key={index}>{item.title} <strong>{item.minutes} min</strong></li>)}
-        </ol></details>}
-        <div className="result-grid"><section aria-labelledby="important-questions">
-          {showQuestions&&<h3 id="important-questions" ref={questionsHeading} tabIndex={-1}>Important Questions</h3>}
-          {showQuestions&&practicePending&&<p role="status">Preparing practice questions…</p>}
-
-          {showQuestions&&questionsOutsideBudget&&<p>These questions are available for reference. None fits the remaining preparation budget.</p>}
-          {showQuestions&&practiceRetry(lastMinuteQuestions)}
-          {showQuestions&&questionList.map((question,index)=>renderQuestion(question,index))}
-          {showQuestions&&!practicePending&&!questionList.length&&revision&&<article className="question">
-            <p>Practice question · based on your study material</p><h3>{revision.recall}</h3>
-            <details><summary>Show answer</summary><p>{revision.answer}</p></details>
-            <button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button>
-          </article>}
-          {showQuestions&&!practicePending&&!questionList.length&&!revision&&<p>No reliable questions are available for these topics yet.</p>}
-          {sampleMode&&showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>setLimit(current=>current+10)}>Show next 10</button>}
-          {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
-        </section></div>
-          {result.length>0&&pack.warnings.length>0&&<div className="coverage"><h3>Sources and Coverage</h3>
-            <ul className="notice">{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>
-          </div>}
-        </details>
-      </section>}
-      {mode==='study'&&book&&activeBookPage&&<section className="study-book" aria-labelledby="book-page-title">
-        <header className="book-page-header">
-          <p className="book-page-number">Page {bookIndex+1} of {book.pages.length}</p>
-          <h2 id="book-page-title" tabIndex={-1} ref={studyHeading}>{activeBookPage.title}</h2>
-        </header>
-        {documents.some(document=>!documentComplete(document))&&<p className="notice">Unreadable or unverified pages were excluded.</p>}
-        {bookErrors[activeBookPage.id]?<div className="book-page-feedback"><p role="alert">{bookErrors[activeBookPage.id]}</p>
-          <button type="button" className="secondary" onClick={()=>setBookErrors(current=>{const next={...current};delete next[activeBookPage.id];return next;})}>Retry page</button>
-        </div>:activeBookContent?<article className="book-content" aria-label="Study page content">
-          <small>{book.demo?'Demo':activeBookContent.references.length?'AI-generated':'AI-generated · Not source-verified'}</small>
-          <CoachAnswer text={activeBookContent.text}/>
-          {activeBookContent.webLimited&&<p className="notice">Web sources were unavailable for this page.</p>}
-          {activeBookContent.references.length>0&&<details><summary>Sources ({activeBookContent.references.length})</summary>
-            {activeBookContent.references.map(reference=>reference.kind==='uploaded'
-              ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
-              :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}
-          </details>}
-          {bookQuestions.length>0&&<details key={activeBookPage.id} onToggle={event=>{if(event.currentTarget.open)void preparePractice(bookQuestions);}}>
-            <summary>Generate Questions</summary>
-            {practiceRetry(bookQuestions)}
-            {studyPageQuestions.map((question,index)=>renderQuestion(question,index))}
-            {practicePending&&<p role="status">Preparing practice questions…</p>}
-            {!practicePending&&!studyPageQuestions.length&&<p>No reliable practice questions are available for this page.</p>}
-          </details>}
-          <button type="button" className="link accent" onClick={()=>{openWorkspace(true);setCoachPagePrompt(true);}}>Ask Study Coach about this page</button>
-        </article>:<p role="status" className="book-page-feedback">Preparing this page…</p>}
-        <nav className="book-pagination" aria-label="Study pages">
-          <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>Previous</button>
-          <button type="button" className="secondary" disabled={bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1)}>Next</button>
-        </nav>
-        {warnings.length>0&&<details className="book-coverage"><summary>Sources and coverage</summary><ul>{warnings.map(warning=><li key={warning}>{warning}</li>)}</ul></details>}
-      </section>}
       </>}
-      {coachPage&&<section id="study-coach" className="study-output" aria-labelledby="study-coach-title">
-        <div className="coach">
-          <h3 id="study-coach-title">Study Coach</h3>
+      {coachPage&&<section ref={coachSection} id="study-coach" className="coach" aria-labelledby="study-coach-title">
+        <header><h1 id="study-coach-title">Study Coach</h1>
           {coachPagePrompt&&activeBookPage&&<p className="coach-page-topic">{activeBookPage.title}</p>}
-          <form className="inline" onSubmit={event=>{event.preventDefault();send(chat);}}>
-            <input aria-label="Ask about your plan" placeholder="Ask a question…" maxLength={500} value={chat} onChange={event=>setChat(event.target.value)}/>
-            <button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button>
-          </form>
-          <div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0}>
-            {Array.from({length:Math.ceil(messages.length/2)},(_,index)=>index*2).reverse().map(index=>
+        </header>
+        <div className="chat-area">
+          <div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0} onScroll={event=>{
+            const log=event.currentTarget;
+            followChat.current=log.scrollHeight-log.scrollTop-log.clientHeight<60;
+            setShowLatest(!followChat.current);
+          }}>
+            <div ref={chatTranscript}>
+            {Array.from({length:Math.ceil(messages.length/2)},(_,index)=>index*2).map(index=>
               <div className="coach-turn" key={index}>{messages.slice(index,index+2).map(message=>
-                <div className="coach-message" key={message.role}>
-                  <strong>{message.role}</strong>
+                <div className={'coach-message '+(message.role==='You'?'coach-user':'coach-reply')} key={message.role}>
+                  <span className="sr-only">{message.role}</span>
                   {message.pending?<small role="status">Thinking…</small>:message.error?
                     <div className="coach-meta"><small role="alert">{message.error}</small>
                       <button type="button" className="link accent" disabled={coachPending} onClick={()=>retryCoach(message)}>Retry</button></div>
-                    :<>{message.role==='You'?<p>{message.text}</p>:<CoachAnswer text={message.text}/>}
-                      {message.generated&&<small>{message.references?.length?'AI-generated':'AI-generated · Not source-verified'}</small>}
-                      {Boolean(message.references?.length)&&<details><summary>Sources ({message.references?.length})</summary>{message.references?.map(reference=>reference.kind==='uploaded'
-                        ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
-                        :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</details>}
+                    :message.role==='You'?<p>{message.text}</p>:<><CoachAnswer text={message.text}/>
+                      <SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/>
                     </>}
                 </div>)}</div>)}
+            </div>
           </div>
+          {showLatest&&<button type="button" className="secondary jump-latest" onClick={scrollChatToLatest}>Latest ↓</button>}
         </div>
+        <form className="inline coach-composer" onSubmit={event=>{event.preventDefault();send(chat);}}>
+          <input aria-label="Ask about your plan" placeholder="Ask a question…" maxLength={500} value={chat} onChange={event=>setChat(event.target.value)}/>
+          <button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button>
+        </form>
       </section>}
     </main>
-    <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>
+    {!coachPage&&<footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>}
+    <dialog ref={infoDialog} aria-labelledby="study-info-title" onClick={event=>{if(event.target===event.currentTarget)event.currentTarget.close();}}>
+      <div className="dialog-content info-content">
+        <div className="info-heading"><h2 id="study-info-title">Study information</h2>
+          <form method="dialog"><button className="icon-btn" aria-label="Close study information"><Icon name="close"/></button></form>
+        </div>
+        {workspaceResult&&mode==='last-minute'&&<div className="study-actions">
+          <DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={()=>{infoDialog.current?.close();reset();}}>Start over</button>
+        </div>}
+        {mode==='last-minute'&&workspaceResult&&pack.timeline.length>0&&<details><summary>Time breakdown</summary><ol className="study-timeline">
+          {pack.timeline.map((item,index)=><li key={index}>{item.title} <strong>{item.minutes} min</strong></li>)}
+        </ol></details>}
+        {workspaceResult&&pack.warnings.length>0&&<details><summary>Sources and coverage</summary>
+          <ul>{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>
+        </details>}
+        {(aiNote||activeBookContent)&&<section>
+          <h3>Source verification</h3>
+          <p>Sources links to the uploaded passages or web references used in an answer. Unverified explanations are labeled beside the study content.</p>
+          {(mode==='study'?activeBookContent?.webLimited:summaryWebLimited)&&<p>Web sources were unavailable for this result.</p>}
+        </section>}
+        {!sampleMode&&activeApi.prepare&&documents.length>0&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
+        {!coachPage&&<button className="link accent" type="button" disabled={busy} onClick={()=>{infoDialog.current?.close();toggleExample();}}>{exampleMode?'Exit demo':'Try an example'}</button>}
+        {sampleMode?<p>Demo · Sample DBMS data</p>:<p>Original files stay on this device. Extracted text is sent for analysis.</p>}
+      </div>
+    </dialog>
     <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>
       {source?<><h2 id="dialog-title">{source.file}</h2><p>{sampleMode?'Sample fixture · ':''}{source.file==='Pasted text'?source.number:documentLocation(source.file,source.page)+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={originalDocumentLink(source.file,sourceUrl,source.page)}>{documentFormat(source.file)==='pdf'?'Open original PDF at page '+source.page:'Open original file'}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>Original files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
     </div></dialog>
