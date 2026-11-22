@@ -1,6 +1,6 @@
 // Only catalog labels may leave the Worker as automatic search terms.
 const groups=[
- ['operating systems',['deadlock prevention','deadlock avoidance',"banker’s algorithm",'deadlock','page replacement','fifo','lru','virtual memory','paging','segmentation','process scheduling','semaphore','mutex','race condition','thrashing','process synchronization']],
+ ['operating systems',['deadlock prevention','deadlock avoidance',"banker’s algorithm",'deadlock','page replacement','fifo','lru','virtual memory','paging','segmentation','process scheduling','cpu scheduling','process management','operating system structures','file systems','disk scheduling','memory management','semaphore','mutex','race condition','thrashing','process synchronization']],
  ['databases',['database normalization','normalization','functional dependency','third normal form','bcnf','acid properties','serializability','sql joins','database indexing','transactions','er diagram']],
  ['computer networks',['tcp congestion control','tcp','udp','osi model','subnetting','dns','routing','flow control','http','network address translation']],
  ['data structures and algorithms',['binary search tree','binary search','dijkstra','dynamic programming','breadth first search','depth first search','merge sort','quick sort','hash table','time complexity','linked list']],
@@ -31,4 +31,36 @@ export function coachTopic(question,topics,lastQuestion=''){
  const searchTopic=topic&&(position||factual.test(question)||normalize(text)===topic.concept)
   ?topic.subject+' '+topic.concept+' explanation':'';
  return {searchTopic,selectedTopic:position?text:''};
+}
+
+const subjects=[
+ ['operating systems',/\b(?:operating systems?|tcs\s*502|os)\b/i],
+ ['databases',/\b(?:database(?: management)? systems?|dbms)\b/i],
+ ['computer networks',/\b(?:computer networks?|data communications?)\b/i],
+ ['data structures and algorithms',/\b(?:data structures?|dsa|design and analysis of algorithms)\b/i],
+ ['mathematics',/\b(?:mathematics|linear algebra|probability and statistics)\b/i],
+ ['machine learning',/\b(?:machine learning|artificial intelligence)\b/i],
+ ['physics',/\bphysics\b/i],['chemistry',/\bchemistry\b/i],['biology',/\bbiology\b/i],
+];
+const contains=(text,concept)=>(' '+normalize(text)+' ').includes(' '+concept+' ');
+
+export function studySubject(text){
+ const explicit=subjects.find(([,pattern])=>pattern.test(text))?.[0];
+ if(explicit)return explicit;
+ const matches=groups.map(([subject,concepts])=>({subject,count:concepts.filter(concept=>contains(text,normalize(concept))).length}))
+  .sort((a,b)=>b.count-a.count);
+ return matches[0].count>=2&&matches[0].count>matches[1].count?matches[0].subject:'';
+}
+
+export function summarySearchTopic(subject,topics){
+ const labels=[...topics];
+ const canonical=studySubject(subject)||studySubject(labels.join(' '));
+ const concepts=[];
+ for(const label of labels){
+  const term=catalog.find(entry=>(!canonical||entry.subject===canonical)&&contains(label,entry.concept));
+  if(term&&!concepts.includes(term.concept))concepts.push(term.concept);
+  if(concepts.length>=2)break;
+ }
+ const department=canonical||catalog.find(entry=>entry.concept===concepts[0])?.subject;
+ return department?[department,...concepts,'study guide'].join(' ').slice(0,100):'';
 }

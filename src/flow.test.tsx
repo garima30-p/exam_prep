@@ -25,7 +25,7 @@ it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary 
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     expect(host.querySelector('[aria-label="Revision notes"]')).toBeNull();
     expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('AI generation is temporarily unavailable');
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Workers AI binding is missing');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('AI generation failed. Please retry.');
     expect(host.querySelector('#prompt')).not.toBeNull();
   }finally{
     await act(async()=>root.unmount());
@@ -53,7 +53,7 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     await act(async()=>picker.dispatchEvent(new Event('change',{bubbles:true})));
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Type for DBMS_PYQ.pdf"]')?.value).toBe('Past paper');
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    expect(host.textContent).toContain('How many minutes can you study?');
+    expect(host.textContent).toContain('How much time do you have to prepare?');
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('#time')!,'5 hours'));
     await act(async()=>host.querySelector('#time')!.closest('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     await act(async()=>{await new Promise(resolve=>setTimeout(resolve,460));});
@@ -61,7 +61,7 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
     expect(host.querySelectorAll('.question')).toHaveLength(10);
     expect(document.activeElement?.id).toBe('results-title');
-    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Notes are generated ↓');
+    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Summary generated ↓');
     expect(host.querySelector('.coach')).toBeNull();
     await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('[aria-label="Ask about your plan"]')!,'Why #1?'));
@@ -77,7 +77,7 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(allocations.reduce((sum,item)=>sum+item,0)).toBeLessThanOrEqual(30);
     await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. I have two hours.'));
     expect(host.querySelector('#results-title')).toBeNull();
-    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Generate Notes');
+    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Generate Summary');
   } finally {
     await act(async()=>root.unmount());
     host.remove();

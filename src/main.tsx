@@ -15,6 +15,7 @@ import { answerLines, buildStudyPack, familiarityLabels, sourceLabel } from './s
 import { DownloadStudyPack } from './study-output';
 import { revise, revisionFromAnswer } from './revision';
 import type { Revision } from './revision';
+import { inspectStudyInput } from './study-input';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
@@ -99,8 +100,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   useEffect(()=>{if(chatLog.current)chatLog.current.scrollTop=0;},[messages]);
   const [chat,setChat]=useState('');
   const [coachPending,setCoachPending]=useState(false);
-  const [sourceMode,setSourceMode]=useState('mixed');
-  const [publicTopic,setPublicTopic]=useState('');
+  const [needsSubject,setNeedsSubject]=useState(false);
+  const [subjectReply,setSubjectReply]=useState('');
+  const [summaryWebLimited,setSummaryWebLimited]=useState(false);
   const [limit,setLimit]=useState(10);
   const [page,setPage]=useState<Page|null>(null);
   const [source,setSource]=useState<Source|null>(null);
@@ -130,7 +132,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(accepted.length){setPlanGenerated(false);setAwaitReview(false);}
     setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 files of 20 MB each. Use PDF, DOCX, PPTX, PNG, JPEG, WebP, or BMP. Save older .ppt files as .pptx.' : '');
   };
-  const editPrompt=(value:string)=>{setPrompt(value);setContext(activeApi.parse(value));setNeedsTime(false);setPlanGenerated(false);};
+  const editPrompt=(value:string)=>{setPrompt(value);setContext(activeApi.parse(value));setNeedsTime(false);setNeedsSubject(false);setPlanGenerated(false);};
   const restartBudget=()=>{timeAnchor.current=Date.now();setElapsed(0);};
   const update=<K extends keyof Context,>(key:K,value:Context[K])=>{
     if(key==='minutes')restartBudget();
@@ -142,7 +144,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(controller.current) return;
     if(!prompt.trim() && !files.length) {setNotice('Describe your exam or attach a file to begin.');return;}
     if(!adjusted.minutes&&/\b(?:timed plan|(?:make|build|create|give me) (?:a |my )?(?:study|revision|preparation) plan)\b/i.test(prompt.split(/summari[sz]e (?:my |these |the )?notes:/i)[0])){setNeedsTime(true);return;}
-    setNeedsTime(false);setNotice('');setBusy(true);
+    setNeedsTime(false);setNeedsSubject(false);setNotice('');setBusy(true);
     const run=new AbortController();
     controller.current=run;
     setProcessingMessage(activeApi.prepare&&files.length?'Opening attachments…':'Building your plan…');
@@ -161,10 +163,19 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       run.signal.throwIfAborted();
       setAwaitReview(false);
       setProcessingMessage('Building your plan…');
-      const extracted=sampleMode?null:revise(prompt,records,files,adjusted.subject);
+      const inspected=sampleMode?{files,subject:'',topics:[]}:inspectStudyInput(records,files);
+      const classified=inspected.files;
+      if(!sampleMode&&records.length)setFiles(classified);
+      if(!adjusted.subject&&inspected.subject){
+        adjusted={...adjusted,subject:inspected.subject};setContext(adjusted);
+      }
+      const extracted=sampleMode?null:revise(prompt,records,classified,adjusted.subject);
+      if(!sampleMode&&classified.length&&!prompt.trim()&&!adjusted.minutes){
+        setNeedsTime(true);return;
+      }
       let analysis:Analysis;
       try {
-        analysis=await activeApi.analyze(adjusted, files, prompt,{documents:records,signal:run.signal,
+        analysis=await activeApi.analyze(adjusted, classified, prompt,{documents:records,signal:run.signal,
           onPlanning:()=>setProcessingMessage('Matching equivalent questions and building your plan…')});
       } catch(error) {
         run.signal.throwIfAborted();
@@ -173,31 +184,33 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
       const summary=extracted??revisionFromAnswer(analysis.questions.find(question=>question.answerSource))
         ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
-      const allowWeb=sourceMode!=='notes'&&!sampleMode;
-      if(!summary&&!allowWeb){
-        setNotice('There is not enough explanatory material to generate study notes. Add class notes or choose Notes + Web and enter a public search topic in Edit details.');
-        return;
-      }
+      const prioritized=analysis.optimization?.plan.selectedQuestionIds.map(id=>
+        analysis.optimization?.candidates.find(question=>question.id===id)?.topic).filter((topic):topic is string=>Boolean(topic))??[];
+      const topics=[...new Set([...prioritized,...inspected.topics,...analysis.questions.map(question=>question.topic)])]
+        .slice(0,adjusted.minutes>0&&adjusted.minutes<=15?5:10);
+      if(!sampleMode&&!summary&&!adjusted.subject&&!topics.length){setNeedsSubject(true);return;}
       setAiNote('');
       setAiReferences([]);
+      setSummaryWebLimited(false);
       if(!sampleMode){
-        setProcessingMessage('Generating study notes with Gemma…');
-        const failure=summary?'AI generation is temporarily unavailable. Your material was extracted successfully, but no AI summary was generated.'
-          :'AI generation is temporarily unavailable. No AI summary was generated.';
+        setProcessingMessage(summary?'Writing your revision summary…':'Looking for material to explain the key topics…');
         try {
           const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(50000)]),
-            body:JSON.stringify({task:'notes',mode:sourceMode,publicTopic,minutes:adjusted.minutes,
-              topic:summary?.title??adjusted.subject,request:'Write concise exam notes with important concepts and recall points for '+(summary?.title||adjusted.subject||publicTopic||'the supplied study material')+'.',
+            body:JSON.stringify({task:'notes',mode:'auto',subject:adjusted.subject,topics,minutes:adjusted.minutes,
+              topic:summary?.title??adjusted.subject,request:'Write a concise revision summary for '+(summary?.title||adjusted.subject||'the supplied study topics')+'.',
               sources:summary?.passages??[]})});
-          const data=await response.json() as {explanation?:string;error?:string;code?:string;sources?:CoachSource[]};
+          const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
           if(!response.ok||!data.explanation?.trim()){
-            setNotice(data.error||'No valid AI summary was returned.');return;
+            if(data.code==='subject_required')setNeedsSubject(true);
+            else setNotice(data.code==='usage_limit'?'The AI usage limit has been reached. Try again later.':'AI generation failed. Please retry.');
+            return;
           }
           setAiNote(data.explanation);
           setAiReferences(data.sources??[]);
+          setSummaryWebLimited(Boolean(data.webSearch&&data.webSearch.code!=='ok'));
         }catch{
           run.signal.throwIfAborted();
-          setNotice(failure+' The request failed.');return;
+          setNotice('AI generation failed. Please retry.');return;
         }
       }
       setRevision(summary);setEditing(false);setShowQuestions(false);
@@ -318,11 +331,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     void askCoach(pending,message.retry);
   }
   function open(next:Page|null, reference:Source|null=null){setPage(next);setSource(reference);dialog.current?.showModal();}
-  function reset(){activeCoachRequest.current?.abort();activeCoachRequest.current=null;setCoachPending(false);setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNotice('');setTimeReply('');setPlanGenerated(false);}
+  function reset(){activeCoachRequest.current?.abort();activeCoachRequest.current=null;setCoachPending(false);setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNeedsSubject(false);setNotice('');setTimeReply('');setSubjectReply('');setPlanGenerated(false);}
   function toggleExample(){setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);setExampleMode(!exampleMode);editPrompt(exampleMode?'':sample);}
   function modifyFile(id:number,kind?:string) {
-    setFiles(current=>kind?current.map(file=>file.id===id?{...file,kind}:file):current.filter(file=>file.id!==id));
-    setDocuments(current=>current.filter(document=>document.id!==id));
+    setFiles(current=>kind?current.map(file=>file.id===id?{...file,kind,kindOverride:true}:file):current.filter(file=>file.id!==id));
+    if(!kind)setDocuments(current=>current.filter(document=>document.id!==id));
     setAwaitReview(false);setPlanGenerated(false);
   }
   function verifyPage(id:number,number:number,text:string){
@@ -366,10 +379,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </article>;
   }
   const hasContext=Boolean(prompt.trim() || files.length);
-  const sourceControls=<>
-    <label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
-          {sourceMode!=='notes'&&<label>Public topic for web search<input value={publicTopic} maxLength={100} placeholder="e.g. deadlock avoidance" onChange={event=>setPublicTopic(event.target.value)}/></label>}
-  </>;
   return <>
     <header className="top"><div className="wrap header-inner">
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
@@ -387,11 +396,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         <form onSubmit={event=>{if(!planGenerated){void generate(event);return;}event.preventDefault();if(editing)setEditing(false);else resultHeading.current?.scrollIntoView?.({block:'start'});}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
           <label htmlFor="prompt">Paste notes or add a file</label>
           <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="Paste a passage, or describe what you want to revise" rows={3} maxLength={8000}/>
-          {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
+          {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
-            <button className="primary" disabled={busy} type="submit">{busy?'Generating notes…':planGenerated?'Notes are generated ↓':'Generate Notes'}</button>
+            <button className="primary" disabled={busy} type="submit">{busy?'Generating summary…':planGenerated?'Summary generated ↓':'Generate Summary'}</button>
           </div>
         </form>
         {notice && <p role="alert" className="notice">{notice}</p>}
@@ -401,10 +410,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>{update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))));setPlanGenerated(false);}}/></label>
           <label>Pass mark<input value={context.pass} placeholder="Optional" onChange={e=>update('pass',e.target.value)}/></label>
           <label>Paper rules<input value={context.pattern} placeholder="Optional" onChange={e=>update('pattern',e.target.value)}/></label>
-          {!sampleMode&&sourceControls}
           {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
         </fieldset></details>}
-        {needsTime && <form className="followup" onSubmit={e=>{e.preventDefault();const minutes=duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0);if(!minutes||!Number.isSafeInteger(minutes)){setNotice('Enter study time in minutes or hours.');return;} const adjusted={...context,minutes};setContext(adjusted);void generate(undefined,adjusted);}}><label htmlFor="time">How many minutes can you study?</label><div className="inline"><input autoFocus id="time" value={timeReply} onChange={e=>setTimeReply(e.target.value)} placeholder="e.g. 2 hours"/><button className="primary">Continue</button></div></form>}
+        {needsTime && <form className="followup" onSubmit={e=>{e.preventDefault();const minutes=duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0);if(!minutes||!Number.isSafeInteger(minutes)){setNotice('Enter study time in minutes or hours.');return;} const adjusted={...context,minutes};setContext(adjusted);void generate(undefined,adjusted,documents.length?'continue':'normal');}}><label htmlFor="time">How much time do you have to prepare?</label><div className="inline"><input autoFocus id="time" value={timeReply} onChange={e=>setTimeReply(e.target.value)} placeholder="e.g. 2 hours"/><button className="primary">Continue</button></div></form>}
+        {needsSubject&&<form className="followup" onSubmit={event=>{event.preventDefault();if(!subjectReply.trim())return;const adjusted={...context,subject:subjectReply.trim()};setContext(adjusted);void generate(undefined,adjusted,documents.length?'continue':'normal');}}>
+          <label htmlFor="summary-subject">What subject should I summarize?</label>
+          <div className="inline"><input id="summary-subject" value={subjectReply} maxLength={100} onChange={event=>setSubjectReply(event.target.value)}/><button className="primary" disabled={!subjectReply.trim()}>Continue</button></div>
+        </form>}
         <div className="setup-meta"><button className="link accent" type="button" disabled={busy} onClick={toggleExample}>{exampleMode?'Exit demo':'Try an example'}</button>{sampleMode?<small>Demo · Sample DBMS data</small>:hasContext&&<small>Original files stay on device. Text is sent for analysis.</small>}</div>
         {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading sample questions…':processingMessage}</p>
           {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
@@ -413,10 +425,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(undefined,context,'retry')}>Retry unread files</button>}
       </section>
       {result && planGenerated && !editing && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse notes">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
+        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Revision summary{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse summary">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
         <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
         {aiNote?<article className="study-note" aria-label="Revision notes">
-          <strong>{aiReferences.length?'AI-generated':'AI-generated · Not source-verified'}</strong><p style={{whiteSpace:'pre-wrap'}}>{aiNote}</p>
+          <strong>{aiReferences.length?'AI-generated':'AI-generated · Not source-verified'}</strong>
+          {summaryWebLimited&&<p className="notice">Web sources were unavailable. {aiReferences.length?'This summary uses your uploaded material.':'This is a general explanation.'}</p>}
+          <CoachAnswer text={aiNote}/>
           {aiReferences.length>0&&<details><summary>References used</summary>{aiReferences.map(reference=>reference.kind==='uploaded'
             ?<button className="link accent source" key={reference.id} onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
             :<a className="link accent source" key={reference.id} href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</details>}
@@ -424,6 +438,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <h3>{revision.title}</h3>{revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
           <details><summary>Show answer</summary><p>{revision.answer}</p></details>
         </article>}
+        {documents.some(document=>!documentComplete(document))&&<p className="notice">Unreadable or unverified pages were excluded from the summary.</p>}
         {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
         <button className="secondary" onClick={()=>setShowQuestions(true)} disabled={showQuestions}>Generate Questions</button>
         <details className="study-output" open={showQuestions||undefined}><summary>More study tools</summary>

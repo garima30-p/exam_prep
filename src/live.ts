@@ -14,7 +14,7 @@ export const liveApi:ExamApi = {
   async analyze(context, files, prompt, options):Promise<Analysis> {
     const warnings:string[]=[];
     if(files.length&&!options?.documents)throw new Error('Read and check the attachments before generating a plan.');
-    const materials=files.map(item=>{
+    const materials=files.filter(item=>item.kind!=='Administrative'&&item.kind!=='Unreadable').map(item=>{
       const record=options?.documents.find(document=>document.id===item.id);
       const complete=record!==undefined&&documentComplete(record);
       return {name:item.file.name,kind:item.kind,documentIndex:item.id,complete,totalPages:record?.total??null,

@@ -266,3 +266,33 @@ it('asks to identify an unresolved topic and rejects blank submissions without c
   expect((await handle(post('coach',{mode:'auto',request:'   '}),env)).status).toBe(400);
   expect(run).not.toHaveBeenCalled();
 });
+
+it('automatically uses public syllabus concepts for short summaries without leaking private text',async()=>{
+  const {env,run}=setup();
+  env.TAVILY_API_KEY='test-secret';
+  run.mockResolvedValueOnce(structured('W1','Deadlock prevention breaks at least one necessary condition for deadlock.'));
+  const search=vi.fn(async()=>Response.json({results:[{title:'OS reference',url:'https://example.edu/os',
+    content:'Deadlock prevention breaks at least one necessary condition for deadlock.'}]}));
+  vi.stubGlobal('fetch',search);
+  try{
+    const response=await handle(post('coach',{task:'notes',mode:'auto',minutes:10,subject:'Operating Systems',
+      topics:['Deadlock prevention — private name Jane Example','Page replacement'],request:'Write revision notes.'}),env);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(search.mock.calls[0][1].body).query).toBe('operating systems deadlock prevention page replacement study guide');
+    expect(await response.json()).toMatchObject({sources:[{id:'W1',url:'https://example.edu/os'}],webSearch:{providerStatus:200}});
+    expect(run.mock.calls[0][1].max_completion_tokens).toBe(390);
+  }finally{vi.unstubAllGlobals();}
+});
+
+it('generates explicitly unverified notes when search is unavailable and asks only when context is missing',async()=>{
+  const {env,run}=setup();
+  run.mockResolvedValueOnce({response:'Virtual memory lets each process use its own address space.'});
+  const response=await handle(post('coach',{task:'notes',mode:'auto',minutes:10,subject:'Operating Systems',
+    topics:['Virtual memory'],request:'Write concise revision notes.'}),env);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({sources:[],webSearch:{code:'web_not_configured'},sourceVerified:false});
+  const clarification=await handle(post('coach',{task:'notes',mode:'auto',minutes:10,request:'Write concise revision notes.'}),env);
+  expect(clarification.status).toBe(422);
+  expect(await clarification.json()).toMatchObject({code:'subject_required'});
+  expect(run).toHaveBeenCalledTimes(1);
+});

@@ -1,5 +1,5 @@
 import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, generateStudyReply, webSearchStatus } from './study-ai.mjs';
-import { administrativeLine } from './study-material.mjs';
+import { administrativeLine, administrativeSection, syllabusContentsHeading, syllabusEnd, syllabusUnit } from './study-material.mjs';
 import { describeLearning, makeLearningPlan } from './learning.mjs';
 import { exactQuestionKey } from './semantic.mjs';
 import { initialMinutes, scorePriority } from './evidence.mjs';
@@ -44,6 +44,7 @@ function candidates(materials) {
   for (const material of materials) {
     const structured=material.kind==='Notes'&&material.pages.some(page=>page.text.split(/\r?\n/).some(line=>solvedHeading.test(compact(line))));
     let unit = 0;
+    let syllabusTable=false;
     let section = '';
     const year=Number(material.name.match(/\b(?:19|20)\d{2}\b|(?<=_)\d{4}(?=[_.])/g)?.find(value=>/^(19|20)/.test(value)))||0;
     for (const page of material.pages) {
@@ -53,7 +54,11 @@ function candidates(materials) {
         if(administrativeLine(line))continue;
         const sectionHeading=line.match(/^section\s+([a-z]|[ivx]+|\d+)\b/i);
         if(sectionHeading) {section=sectionHeading[1].toUpperCase();continue;}
-        const heading = line.match(/^unit\s+([1-9][0-9]?|i{1,3}|iv|v|vi{1,3}|ix|x)\b\s*[-–:.]?\s*(.*)/i);
+        if(material.kind==='Syllabus'){
+          if(syllabusContentsHeading(line)){syllabusTable=true;continue;}
+          if(syllabusEnd(line)){syllabusTable=false;unit=0;continue;}
+        }
+        const heading = syllabusUnit(line);
         if (heading) {
           unit = Number(heading[1]) || ['i','ii','iii','iv','v','vi','vii','viii','ix','x'].indexOf(heading[1].toLowerCase())+1;
         }
@@ -64,7 +69,7 @@ function candidates(materials) {
         }
         const question = boilerplate.test(line)||(structured&&!solvedHeading.test(line))?null:readQuestionCue(line,material.kind==='Past paper');
         const isTopic = material.kind==='Syllabus' && (heading?.[2] || line.match(/^[-•]\s+(.+)/)?.[1]
-          || (!heading && unit && line.length>=12 && !/^page\s/i.test(line) ? line : ''));
+          || (!heading && (unit||syllabusTable) && line.length>=12 && !/^(?:page\s|sl\.?\s*no\.?|contact hours|contents$)/i.test(line) ? line : ''));
         if (!question && !isTopic) continue;
         const base = question?.text ?? isTopic;
         const {text,marks}=readMarks(base);
@@ -103,6 +108,15 @@ function candidates(materials) {
 }
 
 export function buildPlan(materials) {
+  materials=materials.map(material=>{
+    if(material.kind!=='Syllabus')return material;
+    let inOutcomes=false;
+    return {...material,pages:material.pages.map(page=>({...page,text:page.text.split(/\r?\n/).map(line=>{
+      if(syllabusUnit(line)||syllabusContentsHeading(line))inOutcomes=false;
+      if(administrativeSection(line))inOutcomes=true;
+      return inOutcomes||administrativeLine(line)?'':line;
+    }).join('\n')}))};
+  });
   const notes=[];
   let totalLines=0;
   for (const material of materials.filter(item=>item.kind!=='Past paper')) {
@@ -125,6 +139,7 @@ export function buildPlan(materials) {
             excerpt,words:tokens(cue.text),prompt:cue.text,documentIndex:material.documentIndex,method:page.method});
         }
         if(cue || /^\s*(?:unit\b|p[0-9]\s*\||learn\s*\/\s*verify|exam cue:|source policy|how to use)/i.test(line))continue;
+        if(material.kind==='Syllabus'&&!/\b(?:is defined as|occurs when|means|works by|is a type of)\b/i.test(line))continue;
         const excerpt=compact(line);
         if (excerpt.length<45 || !/[.!]$/.test(excerpt) || excerpt.length>650 || /\b(?:exam is|minutes to study|marks to pass)\b/i.test(excerpt)) continue;
         notes.push({file:material.name,page:page.number,number:'Line '+(lineIndex+1),excerpt,words:tokens(excerpt),documentIndex:material.documentIndex,method:page.method});

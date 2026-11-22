@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { revise } from './revision';
+import { inspectStudyInput } from './study-input';
 
 const text='FIFO evicts the page that arrived earliest. LRU evicts the page whose most recent access was furthest in the past. A hit updates recency in LRU.';
 
@@ -33,4 +34,28 @@ it('retains a notes PDF citation and excludes question-only past-paper text from
   expect(revise('',[document],[file],'')?.passages[0]).toMatchObject({file:'lecture.pdf',page:1,documentIndex:4});
   const paper={...document,pages:[{...document.pages[0],text:'Q1. Compare FIFO and LRU page replacement policies.'}]};
   expect(revise('',[paper],[{...file,kind:'Past paper'}],'')).toBeNull();
+});
+
+it('does not count the exact exam request as uploaded explanation evidence',()=>{
+  const input='My Operating Systems exam is tomorrow. I have only 10 minutes to study. Use my attached syllabus and previous-year paper to identify what matters most and generate concise revision notes.';
+  expect(revise(input,[],[],'Operating Systems')).toBeNull();
+});
+
+it('classifies from trusted content and keeps learner overrides',()=>{
+  const files=[1,2,3,4].map(id=>({id,kind:'Unclassified',file:{name:'upload-'+id+'.pdf'} as File}));
+  const document=(id:number,text:string,status:'extracted'|'review'='extracted')=>({
+    id,name:'upload-'+id+'.pdf',total:1,
+    pages:[{number:1,text,status,method:'ocr' as const,questions:0,reason:''}],
+  });
+  const documents=[
+    document(1,'TCS 502 Operating Systems\nCourse Outcomes\nIdentify administrative requirements.\nDetails of the Course\nUnit I: CPU scheduling\nUnit II: Deadlock prevention'),
+    document(2,'End Semester Examination\nOperating Systems\nQ1. Explain deadlock prevention.\nQ2. Compare FIFO and LRU.'),
+    document(3,'Department of computer science\nCourse Outcomes\nUnderstand the concept.'),
+    document(4,'garbled deadlock OCR','review'),
+  ];
+  const result=inspectStudyInput(documents,files);
+  expect(result.files.map(file=>file.kind)).toEqual(['Syllabus','Past paper','Administrative','Unreadable']);
+  expect(result.subject).toBe('Operating systems');
+  expect(result.topics).toEqual(['CPU scheduling','Deadlock prevention']);
+  expect(inspectStudyInput(documents,[{...files[1],kind:'Notes',kindOverride:true}]).files[0].kind).toBe('Notes');
 });
