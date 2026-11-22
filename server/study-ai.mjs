@@ -33,32 +33,56 @@ const terms=text=>new Set((text.toLowerCase().match(/[a-z]{3,}/g)??[]).filter(wo
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
 const searchCache=new Map();
 
+// Basic search uses one credit. Even 31 days at this ceiling use at most 930
+// credits from this Worker. Provider limits still apply across the account.
+const MAX_GLOBAL_SEARCHES_PER_DAY=30;
+function dailyLimit(value,defaultLimit,max){
+ const configured=typeof value==='string'&&/^\d+$/.test(value)?Number(value):value;
+ return Number.isSafeInteger(configured)&&configured>0?Math.min(configured,max):Math.min(defaultLimit,max);
+}
+
 export class StudyBudget {
- constructor(state){this.state=state;}
+ constructor(state,env={}){
+  this.state=state;
+  this.globalLimit=dailyLimit(env.TAVILY_GLOBAL_DAILY_LIMIT,10,MAX_GLOBAL_SEARCHES_PER_DAY);
+  this.guestLimit=dailyLimit(env.TAVILY_GUEST_DAILY_LIMIT,3,this.globalLimit);
+ }
  async fetch(request){
   const {guest,kind}=await request.json();
-  if(kind!=='search'||!/^([a-f0-9]{64})$/.test(guest))return json({},400);
+  if(!['search','status'].includes(kind)||typeof guest!=='string'||!/^[a-f0-9]{64}$/.test(guest))return json({},400);
   const day=new Date().toISOString().slice(0,10);
-  const allowed=await this.state.storage.transaction(async tx=>{
+  const resetAt=new Date(Date.parse(day)+86_400_000).toISOString();
+  const snapshot=await this.state.storage.transaction(async tx=>{
    const previous=await tx.get('usage');
    const usage=previous?.day===day?previous:{day,search:0,guests:{}};
-   const count=usage.guests[guest]?.search??0;
-   if(usage.search>=10||count>=3)return false;
-   usage.guests[guest]={search:count+1};
-   await tx.put('usage',{day,search:usage.search+1,guests:usage.guests});
-   return true;
+   const usedByGuest=usage.guests[guest]?.search??0;
+   const blockedBy=[];
+   if(usedByGuest>=this.guestLimit)blockedBy.push('guest_daily');
+   if(usage.search>=this.globalLimit)blockedBy.push('global_daily');
+   const allowed=blockedBy.length===0;
+   const reserved=kind==='search'&&allowed?1:0;
+   if(reserved){
+    usage.guests[guest]={search:usedByGuest+1};
+    await tx.put('usage',{day,search:usage.search+1,guests:usage.guests});
+   }
+   return {allowed,blockedBy,day,resetAt,
+    guest:{used:usedByGuest+reserved,max:this.guestLimit},
+    global:{used:usage.search+reserved,max:this.globalLimit}};
   });
-  return json({allowed});
+  return json(snapshot);
  }
 }
 
-async function reserveSearch(env,guest){
+async function searchBudget(env,guest,kind='search'){
  const stub=env.STUDY_BUDGET.get(env.STUDY_BUDGET.idFromName('global'));
- const response=await stub.fetch('https://budget.internal/',{method:'POST',body:JSON.stringify({guest,kind:'search'})});
+ const response=await stub.fetch('https://budget.internal/',{method:'POST',body:JSON.stringify({guest,kind})});
  if(!response.ok)throw new Error('Search quota unavailable');
- const {allowed}=await response.json();
- if(typeof allowed!=='boolean')throw new Error('Invalid search quota response');
- return allowed;
+ const budget=await response.json();
+ if(typeof budget.allowed!=='boolean'||!Array.isArray(budget.blockedBy)||
+    typeof budget.resetAt!=='string'||!Number.isSafeInteger(budget.guest?.used)||
+    !Number.isSafeInteger(budget.guest?.max)||!Number.isSafeInteger(budget.global?.used)||
+    !Number.isSafeInteger(budget.global?.max)||budget.allowed!==(budget.blockedBy.length===0))throw new Error('Invalid search quota response');
+ return budget;
 }
 
 async function runGemma(env,messages,maxTokens,structured=false){
@@ -116,11 +140,22 @@ export async function diagnoseGemma(request,env){
  return json({model:MODEL,bindingAvailable,configuration:status,ok:Boolean(text),parsed:Boolean(text),...metadata,...(text?{explanation:text}:{})},outcome.status);
 }
 
+export async function diagnoseSearchQuota(request,env){
+ if(request.method!=='POST'||!await authorized(request,env?.STUDY_AI_DIAGNOSTIC_TOKEN))return json({error:'Endpoint not found.'},404);
+ try{
+  const budget=await searchBudget(env,await guestKey(request),'status');
+  return json({provider:'tavily',quota:budget,providerContacted:false});
+ }catch{return json({error:'The search quota could not be read.',code:'web_quota_unavailable'},503);}
+}
+
 const webErrors={
  web_topic_required:{status:422,message:'Enter a public topic to search the web.'},
  web_not_configured:{status:503,message:'Web search is unavailable because Tavily is not configured on this Worker.'},
  web_quota_unavailable:{status:503,message:'Web search is unavailable because its usage limits could not be checked.'},
- web_usage_limit:{status:429,message:'The web search allowance has been reached. Try again later.'},
+ web_usage_limit:{status:429,message:'The app’s daily web search allowance has been reached.'},
+ web_provider_rate_limit:{status:429,message:'Tavily is temporarily limiting search requests.'},
+ web_provider_credit_limit:{status:429,message:'The Tavily plan’s usage limit has been reached.'},
+ web_provider_spending_limit:{status:429,message:'The Tavily spending limit has been reached.'},
  web_auth_failed:{status:503,message:'Tavily rejected the Worker’s web search credentials.'},
  web_provider_failed:{status:502,message:'Tavily could not complete the web search. Try again later.'},
  web_no_results:{status:422,message:'Tavily returned no usable web references for this topic.'},
@@ -132,9 +167,10 @@ export function webSearchStatus(env){
 }
 
 async function retrieveWeb(publicTopic,env,request,requestId){
- const complete=(code,sources=[],providerStatus=null,cached=false)=>{
-  const webSearch={provider:'tavily',code,providerStatus,cached,sourceCount:sources.length};
-  console.info('study_web_search',JSON.stringify({requestId,...webSearch}));
+ const complete=(code,sources=[],providerStatus=null,cached=false,budget=null)=>{
+  const quota=budget?{blockedBy:budget.blockedBy,resetAt:budget.resetAt}:undefined;
+  const webSearch={provider:'tavily',code,providerStatus,cached,sourceCount:sources.length,...(quota?{quota}:{})};
+  console.info('study_web_search',JSON.stringify({requestId,...webSearch,...(budget?{quota:budget}:{})}));
   const error=webErrors[code];
   return {sources,webSearch,webStatus:error?.message??'',status:error?.status??200};
  };
@@ -146,7 +182,8 @@ async function retrieveWeb(publicTopic,env,request,requestId){
  const cached=searchCache.get(key);
  if(cached&&cached.until>Date.now())return complete('ok',cached.sources,null,true);
  try{
-  if(!await reserveSearch(env,await guestKey(request)))return complete('web_usage_limit');
+  const budget=await searchBudget(env,await guestKey(request));
+  if(!budget.allowed)return complete('web_usage_limit',[],null,false,budget);
  }catch{return complete('web_quota_unavailable');}
 
  let providerStatus=null;
@@ -156,8 +193,8 @@ async function retrieveWeb(publicTopic,env,request,requestId){
    body:JSON.stringify({query,search_depth:'basic',auto_parameters:false,max_results:3,include_answer:false,include_raw_content:false})});
   providerStatus=response.status;
   if(!response.ok){
-   const code=[401,403].includes(providerStatus)?'web_auth_failed':
-    [429,432,433].includes(providerStatus)?'web_usage_limit':'web_provider_failed';
+   const code=({401:'web_auth_failed',403:'web_auth_failed',429:'web_provider_rate_limit',
+    432:'web_provider_credit_limit',433:'web_provider_spending_limit'})[providerStatus]??'web_provider_failed';
    return complete(code,[],providerStatus);
   }
   const data=await response.json();
@@ -246,7 +283,9 @@ export async function generateStudyReply(input,env,request){
  let retrieval=wantsWeb?await search():null;
  const requestMetadata=()=>({requestId,...(retrieval?{webSearch:retrieval.webSearch}:{})});
  const webFailure=()=>json({error:retrieval.webStatus,code:retrieval.webSearch.code,...requestMetadata()},retrieval.status);
- if(!automatic&&(mode==='web'||task==='notes'&&!uploaded.length)&&retrieval&&!retrieval.sources.length)return webFailure();
+ // Daily quotas and provider throttling should not interrupt a general explanation.
+ const quotaLimited=()=>retrieval?.status===429;
+ if(!automatic&&(mode==='web'||task==='notes'&&!uploaded.length)&&retrieval&&!retrieval.sources.length&&!quotaLimited())return webFailure();
  const registry=new Map([...uploaded,...(retrieval?.sources??[])].map(source=>[source.id,source]));
  const minutes=Number.isFinite(input.minutes)?Math.max(0,Math.min(input.minutes,1440)):0;
  const maxWords=task==='notes'?(minutes>0&&minutes<=15?240:300):200;
@@ -276,7 +315,7 @@ export async function generateStudyReply(input,env,request){
  log(1,result,checked);
  if(checked?.issue==='insufficient_evidence'&&(automatic||mode==='mixed'&&!wantsWeb)){
   if(!wantsWeb&&(!automatic||publicTopic))retrieval=await search();
-  if(!automatic&&!retrieval.sources.length)return webFailure();
+  if(!automatic&&!retrieval.sources.length&&!quotaLimited())return webFailure();
   const extraSources=wantsWeb?[]:retrieval?.sources??[];
   for(const source of extraSources)registry.set(source.id,source);
   grounded=extraSources.length>0;

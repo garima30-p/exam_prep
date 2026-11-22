@@ -4,7 +4,11 @@
   "main": "server/worker.mjs",
   "compatibility_date": "2026-11-21",
   "ai": { "binding": "AI" },
-  "vars": { "STUDY_AI_ENABLED": "true" },
+  "vars": {
+    "STUDY_AI_ENABLED": "true",
+    "TAVILY_GLOBAL_DAILY_LIMIT": "10",
+    "TAVILY_GUEST_DAILY_LIMIT": "3"
+  },
   "durable_objects": { "bindings": [{ "name": "STUDY_BUDGET", "class_name": "StudyBudget" }] },
   "migrations": [{ "tag": "study-budget-v1", "new_sqlite_classes": ["StudyBudget"] }],
   "assets": {

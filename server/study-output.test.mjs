@@ -32,7 +32,8 @@ const structured=(id='N1',quote=supportingQuote)=>({response:{insufficientEviden
 
 function setup(){
   const run=vi.fn().mockResolvedValue(structured());
-  const reserveSearch=vi.fn(async()=>Response.json({allowed:true}));
+  const reserveSearch=vi.fn(async()=>Response.json({allowed:true,blockedBy:[],resetAt:'2026-11-23T00:00:00.000Z',
+    guest:{used:1,max:3},global:{used:1,max:10}}));
   const env={STUDY_AI_ENABLED:'true',AI:{run},STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:reserveSearch})}};
   return {env,run};
 }
@@ -202,7 +203,7 @@ it('fails closed when the search quota binding is absent',async()=>{
   expect(run).not.toHaveBeenCalled();
 });
 
-it.each([[401,503,'web_auth_failed'],[432,429,'web_usage_limit'],[500,502,'web_provider_failed']])(
+it.each([[401,503,'web_auth_failed'],[500,502,'web_provider_failed']])(
  'reports Tavily status %i without returning provider bodies or credentials',async(providerStatus,status,code)=>{
   const {env,run}=setup();
   env.TAVILY_API_KEY='test-secret';
@@ -333,4 +334,114 @@ it('drops a standalone OCR subpart while keeping a complete unusual exam questio
  const {questions}=await response.json();
  expect(questions).toHaveLength(1);
  expect(questions[0]).toMatchObject({historical:true,prompt:expect.stringContaining('maximum number of user requests'),source:{page:2}});
+});
+
+function quotaStorage(initial){
+ const entries=new Map(initial?[['usage',initial]]:[]);
+ return {storage:{transaction:async callback=>callback({
+  get:async key=>entries.get(key),put:async(key,value)=>entries.set(key,value),
+ })}};
+}
+
+it('returns exact configurable guest and global quota counts with a UTC reset',async()=>{
+ vi.useFakeTimers({toFake:['Date']});
+ try{
+  vi.setSystemTime(new Date('2026-11-22T23:59:59Z'));
+  const budget=new StudyBudget(quotaStorage(),{TAVILY_GLOBAL_DAILY_LIMIT:'3',TAVILY_GUEST_DAILY_LIMIT:'2'});
+  const guest='a'.repeat(64), other='b'.repeat(64);
+  const check=async(kind,key)=>await (await budget.fetch(post('budget',{kind,guest:key}))).json();
+  await check('search',guest);
+  await check('search',guest);
+  const guestBlock={allowed:false,blockedBy:['guest_daily'],guest:{used:2,max:2},global:{used:2,max:3},resetAt:'2026-11-23T00:00:00.000Z'};
+  expect(await check('search',guest)).toMatchObject(guestBlock);
+  expect(await check('status',guest)).toMatchObject(guestBlock);
+  await check('search',other);
+  expect(await check('search',other)).toMatchObject({blockedBy:['global_daily'],guest:{used:1,max:2},global:{used:3,max:3}});
+  expect(await check('status',guest)).toMatchObject({blockedBy:['guest_daily','global_daily']});
+  vi.setSystemTime(new Date('2026-11-23T00:00:00Z'));
+  expect(await check('status',guest)).toMatchObject({allowed:true,blockedBy:[],guest:{used:0,max:2},global:{used:0,max:3},resetAt:'2026-11-24T00:00:00.000Z'});
+ }finally{vi.useRealTimers();}
+});
+
+it('keeps safe maxima for invalid or oversized quota configuration',async()=>{
+ const guest='a'.repeat(64);
+ const status=async(env)=>await (await new StudyBudget(quotaStorage(),env).fetch(post('budget',{kind:'status',guest}))).json();
+ expect(await status({TAVILY_GLOBAL_DAILY_LIMIT:'999',TAVILY_GUEST_DAILY_LIMIT:'999'}))
+  .toMatchObject({guest:{used:0,max:30},global:{used:0,max:30}});
+ expect(await status({TAVILY_GLOBAL_DAILY_LIMIT:'invalid',TAVILY_GUEST_DAILY_LIMIT:'-1'}))
+  .toMatchObject({guest:{used:0,max:3},global:{used:0,max:10}});
+});
+
+it.each([['guest_daily'],['global_daily'],['guest_daily','global_daily']].map(blockedBy=>[blockedBy]))(
+ 'skips Tavily on %j and returns a general Gemma answer',async(blockedBy)=>{
+  const {env,run}=setup();
+  const resetAt='2026-11-23T00:00:00.000Z';
+  env.TAVILY_API_KEY='test-secret';
+  env.STUDY_BUDGET.get=()=>({fetch:async()=>Response.json({allowed:false,blockedBy,resetAt,guest:{used:3,max:3},global:{used:10,max:10}})});
+  run.mockResolvedValueOnce({response:'Deadlock is a circular wait for resources.'});
+  const search=vi.fn();
+  vi.stubGlobal('fetch',search);
+  try{
+   const result=await handle(post('coach',{task:'notes',mode:'web',request:'Explain deadlock.',publicTopic:'operating systems deadlock'}),env);
+   expect(result.status).toBe(200);
+   expect(await result.json()).toMatchObject({explanation:'Deadlock is a circular wait for resources.',sources:[],sourceVerified:false,
+    webSearch:{code:'web_usage_limit',providerStatus:null,quota:{blockedBy,resetAt}}});
+   expect(search).not.toHaveBeenCalled();
+   expect(run).toHaveBeenCalledOnce();
+  }finally{vi.unstubAllGlobals();}
+ });
+
+it.each([[429,'web_provider_rate_limit'],[432,'web_provider_credit_limit'],[433,'web_provider_spending_limit']])(
+ 'distinguishes provider response %i from local quotas and falls back to Gemma',async(providerStatus,code)=>{
+  const {env,run}=setup();
+  env.TAVILY_API_KEY='test-secret';
+  run.mockResolvedValueOnce({response:'Deadlock is a circular wait for resources.'});
+  const search=vi.fn(async()=>new Response('Provider response',{status:providerStatus}));
+  vi.stubGlobal('fetch',search);
+  try{
+   const result=await handle(post('coach',{task:'notes',mode:'web',request:'Explain deadlock.',publicTopic:'operating systems deadlock'}),env);
+   expect(result.status).toBe(200);
+   expect(await result.json()).toMatchObject({sources:[],sourceVerified:false,webSearch:{code,providerStatus}});
+   expect(search).toHaveBeenCalledOnce();
+  }finally{vi.unstubAllGlobals();}
+ });
+
+it('protects the read-only quota diagnostic and never contacts the provider',async()=>{
+ const {env,run}=setup();
+ env.STUDY_AI_DIAGNOSTIC_TOKEN='synthetic-diagnostic-test-token';
+ const budget=new StudyBudget(quotaStorage());
+ const fetchBudget=vi.fn((_url,init)=>budget.fetch(new Request('https://budget.internal/',init)));
+ env.STUDY_BUDGET.get=()=>({fetch:fetchBudget});
+ const search=vi.fn();
+ vi.stubGlobal('fetch',search);
+ try{
+  const url='https://example.test/api/coach/search-quota';
+  expect((await handle(new Request(url,{method:'POST'}),env)).status).toBe(404);
+  expect(fetchBudget).not.toHaveBeenCalled();
+  const response=await handle(new Request(url,{method:'POST',headers:{Authorization:'Bearer '+env.STUDY_AI_DIAGNOSTIC_TOKEN}}),env);
+  expect(await response.json()).toMatchObject({providerContacted:false,quota:{guest:{used:0,max:3},global:{used:0,max:10}}});
+  expect(JSON.parse(fetchBudget.mock.calls[0][1].body).kind).toBe('status');
+  expect(search).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+ }finally{vi.unstubAllGlobals();}
+});
+
+it('uses a general answer when notes are insufficient and the daily search cap blocks the fallback',async()=>{
+ const {env,run}=setup();
+ env.TAVILY_API_KEY='test-secret';
+ env.STUDY_BUDGET.get=()=>({fetch:async()=>Response.json({allowed:false,blockedBy:['guest_daily'],
+  resetAt:'2026-11-23T00:00:00.000Z',guest:{used:3,max:3},global:{used:4,max:10}})});
+ run.mockResolvedValueOnce({response:{insufficientEvidence:true,sections:[]}})
+  .mockResolvedValueOnce({response:'The Bakery algorithm orders contenders using numbered tickets.'});
+ const search=vi.fn();
+ vi.stubGlobal('fetch',search);
+ try{
+  const result=await handle(post('coach',{mode:'mixed',request:'Explain the Bakery algorithm for mutual exclusion.',
+    publicTopic:'Bakery algorithm quota test',sources:[{file:'Notes.pdf',excerpt:supportingQuote}]}),env);
+  expect(result.status).toBe(200);
+  expect(await result.json()).toMatchObject({sources:[],sourceVerified:false,webSearch:{quota:{blockedBy:['guest_daily']}}});
+  expect(search).not.toHaveBeenCalled();
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(run.mock.calls[1][1]).not.toHaveProperty('response_format');
+ }finally{vi.unstubAllGlobals();}
 });
