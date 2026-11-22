@@ -1,4 +1,4 @@
-import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, generateStudyReply } from './study-ai.mjs';
+import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, generateStudyReply, webSearchStatus } from './study-ai.mjs';
 import { administrativeLine } from './study-material.mjs';
 import { describeLearning, makeLearningPlan } from './learning.mjs';
 import { exactQuestionKey } from './semantic.mjs';
@@ -230,7 +230,8 @@ export async function handle(request,env) {
   if(path==='/api/coach/diagnostic')return diagnoseGemma(request,env);
   if(path==='/api/coach/status'&&request.method==='GET'){
     const code=aiStatus(env);
-    return json(code==='ready'?{available:true}:{available:false,code,message:aiErrors[code]});
+    const webSearch=webSearchStatus(env);
+    return json(code==='ready'?{available:true,webSearch}:{available:false,code,message:aiErrors[code],webSearch});
   }
   if (path==='/api/health' && request.method==='GET') return json({status:'ok'});
   if (path!=='/api/analyze' && path!=='/api/coach') return json({error:'Endpoint not found.'},404);

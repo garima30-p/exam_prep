@@ -68,7 +68,9 @@ it('uses Tavily only when permitted and sends only the explicit public topic',as
     run.mockResolvedValueOnce(structured('W1'));
     const answer=await (await handle(post('coach',{...body,mode:'web'}),env)).json();
     expect(answer.sources).toMatchObject([{id:'W1',url:'https://example.edu/concurrency'}]);
-    expect(JSON.parse(search.mock.calls[0][1].body)).toMatchObject({query:'mutual exclusion',search_depth:'basic',max_results:3,include_answer:false});
+    expect(answer.webSearch).toMatchObject({provider:'tavily',providerStatus:200,cached:false,sourceCount:1});
+    expect(search.mock.calls[0][1].headers.Authorization).toBe('Bearer test-secret');
+    expect(JSON.parse(search.mock.calls[0][1].body)).toMatchObject({query:'mutual exclusion',search_depth:'basic',auto_parameters:false,max_results:3,include_answer:false});
     expect(search.mock.calls[0][1].body).not.toContain('Private notes');
     expect(run).toHaveBeenCalledTimes(2);
   }finally{vi.unstubAllGlobals();}
@@ -166,7 +168,7 @@ it('does not invoke Gemma on administrative text with no available web service',
  const strict=await handle(post('coach',{...body,mode:'notes'}),env);
  expect(await strict.json()).toMatchObject({code:'insufficient_evidence'});
  const mixed=await handle(post('coach',{...body,mode:'mixed'}),env);
- expect(await mixed.json()).toMatchObject({code:'web_unavailable'});
+ expect(await mixed.json()).toMatchObject({code:'web_not_configured',webSearch:{providerStatus:null}});
  expect(run).not.toHaveBeenCalled();
 });
 
@@ -183,5 +185,36 @@ it('uses web evidence when matched notes do not answer the question',async()=>{
   expect((await result.json()).sources).toMatchObject([{id:'W1',url:'https://example.edu/bakery'}]);
   expect(search).toHaveBeenCalledOnce();
   expect(run).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(run.mock.calls[0][1].messages.at(-1).content)).toMatchObject({evidenceOnly:true,evidence:[{id:'N1'}]});
+  expect(JSON.parse(run.mock.calls[1][1].messages.at(-1).content)).toMatchObject({evidenceOnly:true,evidence:[{id:'N1'},{id:'W1'}]});
  }finally{vi.unstubAllGlobals();}
 });
+
+it('fails closed when the search quota binding is absent',async()=>{
+  const {env,run}=setup();
+  env.TAVILY_API_KEY='test-secret';
+  delete env.STUDY_BUDGET;
+  const status=await handle(new Request('https://example.test/api/coach/status'),env);
+  expect(await status.json()).toEqual({available:true,webSearch:'web_quota_unavailable'});
+  const response=await handle(post('coach',{mode:'web',request:'Explain deadlock',publicTopic:'deadlock'}),env);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({code:'web_quota_unavailable',webSearch:{providerStatus:null}});
+  expect(run).not.toHaveBeenCalled();
+});
+
+it.each([[401,503,'web_auth_failed'],[432,429,'web_usage_limit'],[500,502,'web_provider_failed']])(
+ 'reports Tavily status %i without returning provider bodies or credentials',async(providerStatus,status,code)=>{
+  const {env,run}=setup();
+  env.TAVILY_API_KEY='test-secret';
+  const search=vi.fn(async()=>new Response('Provider body that could include test-secret',{status:providerStatus}));
+  vi.stubGlobal('fetch',search);
+  try{
+   const response=await handle(post('coach',{mode:'web',request:'Explain deadlock',publicTopic:'deadlock'}),env);
+   const raw=await response.text();
+   expect(response.status).toBe(status);
+   expect(JSON.parse(raw)).toMatchObject({code,webSearch:{providerStatus}});
+   expect(raw).not.toContain('test-secret');
+   expect(search).toHaveBeenCalledOnce();
+   expect(run).not.toHaveBeenCalled();
+  }finally{vi.unstubAllGlobals();}
+ });

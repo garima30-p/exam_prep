@@ -154,7 +154,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
       const allowWeb=sourceMode!=='notes'&&!sampleMode;
       if(!summary&&!allowWeb){
-        setNotice('There is not enough explanatory material to generate study notes. Add class notes or set a public search topic in Study Coach.');
+        setNotice('There is not enough explanatory material to generate study notes. Add class notes or choose Notes + Web and enter a public search topic in Edit details.');
         return;
       }
       setAiNote('');
@@ -347,6 +347,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </article>;
   }
   const hasContext=Boolean(prompt.trim() || files.length);
+  const sourceControls=<>
+    <label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
+          {sourceMode!=='notes'&&<label>Public topic for web search<input value={publicTopic} maxLength={100} placeholder="e.g. deadlock avoidance" onChange={event=>setPublicTopic(event.target.value)}/></label>}
+  </>;
   return <>
     <header className="top"><div className="wrap header-inner">
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
@@ -378,6 +382,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>{update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))));setPlanGenerated(false);}}/></label>
           <label>Pass mark<input value={context.pass} placeholder="Optional" onChange={e=>update('pass',e.target.value)}/></label>
           <label>Paper rules<input value={context.pattern} placeholder="Optional" onChange={e=>update('pattern',e.target.value)}/></label>
+          {!sampleMode&&sourceControls}
           {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
         </fieldset></details>}
         {needsTime && <form className="followup" onSubmit={e=>{e.preventDefault();const minutes=duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0);if(!minutes||!Number.isSafeInteger(minutes)){setNotice('Enter study time in minutes or hours.');return;} const adjusted={...context,minutes};setContext(adjusted);void generate(undefined,adjusted);}}><label htmlFor="time">How many minutes can you study?</label><div className="inline"><input autoFocus id="time" value={timeReply} onChange={e=>setTimeReply(e.target.value)} placeholder="e.g. 2 hours"/><button className="primary">Continue</button></div></form>}
@@ -392,7 +397,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse notes">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
         <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
         {aiNote?<article className="study-note" aria-label="Revision notes">
-          <strong>AI-generated · Not source-verified</strong><p style={{whiteSpace:'pre-wrap'}}>{aiNote}</p>
+          <strong>{aiReferences.length?'AI-generated':'AI-generated · Not source-verified'}</strong><p style={{whiteSpace:'pre-wrap'}}>{aiNote}</p>
           {aiReferences.length>0&&<details><summary>References used</summary>{aiReferences.map(reference=>reference.kind==='uploaded'
             ?<button className="link accent source" key={reference.id} onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
             :<a className="link accent source" key={reference.id} href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</details>}
@@ -423,11 +428,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </details>
       </section>}
       </>}
-      {coachPage&&<section id="study-coach" className="study-output" aria-label="Study Coach"><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3>{!sampleMode&&<div className="study-output"><label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
-          {sourceMode!=='notes'&&generatedCoach&&<label>Public topic for web search<input value={publicTopic} maxLength={100} placeholder="e.g. deadlock avoidance" onChange={event=>setPublicTopic(event.target.value)}/></label>}
+      {coachPage&&<section id="study-coach" className="study-output" aria-label="Study Coach"><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3>{!sampleMode&&<div className="study-output">{sourceControls}
           <small>{generatedCoach?'Relevant excerpts may be sent to Cloudflare Workers AI. Only the public topic field is sent to web search.':coachUnavailable}</small>
           {generatedCoach&&fitted.length>0&&<button className="secondary" disabled={coachPending} onClick={()=>send('Generate revision notes for: '+fitted.slice(0,remainingTime<=15?2:4).map(question=>question.topic).join(', '))}>Generate AI revision notes</button>}</div>}
-          <form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button></form><div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:Array.from({length:Math.ceil(messages.length/2)},(_,index)=>messages.slice(index*2,index*2+2)).reverse().flat().map((m,i)=><div key={i}><strong>{m.role}</strong>{m.generated&&<span className="badge">AI-generated · Not source-verified</span>}<p>{m.text}</p>
+          <form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button></form><div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:Array.from({length:Math.ceil(messages.length/2)},(_,index)=>messages.slice(index*2,index*2+2)).reverse().flat().map((m,i)=><div key={i}><strong>{m.role}</strong>{m.generated&&<span className="badge">{m.references?.length?'AI-generated':'AI-generated · Not source-verified'}</span>}<p>{m.text}</p>
           {Boolean(m.references?.length)&&<details><summary>References used</summary>{m.references?.map(reference=>reference.kind==='uploaded'
             ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>Uploaded Source · {sourceLabel(reference)}</button>
             :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">Web Source · {reference.title} · {new URL(reference.url).hostname}</a>)}</details>}{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div></aside></section>}
