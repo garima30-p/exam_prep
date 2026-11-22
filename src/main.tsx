@@ -261,7 +261,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         }
         generateFor=selected;
       } else reply=activeApi.chat(text,target?[{...target,id:visible.indexOf(target)+1}]:ranked);
-      useGemma=generatedCoach&&!sampleMode&&!coachPending;
+      useGemma=!sampleMode&&!coachPending;
       generateFor??=selected;
       if(target && marks && sampleMode) {
         const sentences=target.answer.match(/[^.!?]+[.!?]*/g) ?? [target.answer];
@@ -269,7 +269,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         if(marks===10) reply+='\nFor a longer response, define the terms and develop a worked example.';
       }
     }
-    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:useGemma?(sourceMode==='notes'?'Preparing an explanation…':'Checking sources and preparing an explanation…'):!sampleMode&&!generatedCoach?coachUnavailable:reply,source:answerSource??undefined};
+    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:useGemma?(sourceMode==='notes'?'Preparing an explanation…':'Checking sources and preparing an explanation…'):reply,source:answerSource??undefined};
     setMessages(current=>[...current,{role:'You',text},message]);setChat('');
     if(useGemma){
       setCoachPending(true);
