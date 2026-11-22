@@ -70,6 +70,7 @@ async function runGemma(env,guest,messages,maxTokens){
  const lease=crypto.randomUUID();
  let timeout;
  let providerStarted=false;
+ let providerSettled=false;
  let result;
  try{
   if(!await charge(env,guest,'ai',lease))return {code:'usage_limit',status:429,durationMs:Date.now()-started};
@@ -78,8 +79,8 @@ async function runGemma(env,guest,messages,maxTokens){
    chat_template_kwargs:{enable_thinking:false},
   }));
   providerStarted=true;
-  void inference.finally(()=>charge(env,guest,'release',lease)).catch(()=>{});
-  const response=await Promise.race([inference,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('timeout')),18_000);})]);
+  const tracked=inference.finally(()=>{providerSettled=true;});
+  const response=await Promise.race([tracked,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('timeout')),18_000);})]);
   const choice=response?.choices?.[0];
   const text=[choice?.message?.content,response?.response]
    .map(value=>clean(value,4200).replace(/^<think>[\s\S]*?(?:<\/think>\s*|$)/,'').trim())
@@ -92,7 +93,11 @@ async function runGemma(env,guest,messages,maxTokens){
   const limit=error?.status===429||['429','3036'].includes(providerCode);
   result={code:limit?'usage_limit':providerStarted&&error?.message!=='timeout'?'model_unavailable':'request_failed',
    status:limit?429:502,...(/^\d{3,6}$/.test(providerCode)?{providerCode}:{})};
- }finally{clearTimeout(timeout);}
+ }finally{
+  clearTimeout(timeout);
+  // Keep timed-out calls reserved until the lease expires.
+  if(providerSettled)await charge(env,guest,'release',lease).catch(()=>{});
+ }
  return {...result,durationMs:Date.now()-started};
 }
 
