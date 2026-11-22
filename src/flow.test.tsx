@@ -24,6 +24,7 @@ it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary 
       prompt.dispatchEvent(new Event('input',{bubbles:true}));
     });
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    if(!prefix)await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='5 minutes')!.click());
     expect(host.querySelector('[aria-label="Revision notes"]')).toBeNull();
     expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('AI generation is temporarily unavailable');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('AI generation failed. Please retry.');
@@ -55,6 +56,7 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Type for DBMS_PYQ.pdf"]')?.value).toBe('Past paper');
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     expect(host.textContent).toContain('How much time do you have to prepare?');
+    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Custom')!.click());
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('#time')!,'5 hours'));
     await act(async()=>host.querySelector('#time')!.closest('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     await act(async()=>{await new Promise(resolve=>setTimeout(resolve,460));});
@@ -167,4 +169,50 @@ it('chooses syllabus-aligned review over a cheap unrelated question in ten minut
  expect(selected.questions.map(q=>q.id)).toEqual([aligned.id]);
  expect(selected.review).toBe(true);
  expect(selected.allocations[aligned.id]+1).toBeLessThanOrEqual(10);
+});
+
+it('generates study pages on demand and keeps page position and analysis across the two modes',async()=>{
+  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
+  const host=document.createElement('div');document.body.append(host);
+  const root=createRoot(host);
+  const requests:{studyUnit?:boolean;topic?:string;minutes?:number;task?:string}[]=[];
+  const api:ExamApi={...demoApi,analyze:vi.fn(demoApi.analyze)};
+  vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{const request=JSON.parse(init.body);requests.push(request);
+    return Response.json({explanation:'Example explanation for '+request.topic,sources:[]});}));
+  const button=(label:string,container:Element=host)=>Array.from(container.querySelectorAll('button')).find(item=>item.textContent===label)!;
+  const click=(label:string,container?:Element)=>act(async()=>button(label,container).click());
+  const submit=()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+  try{
+    await act(async()=>root.render(<App api={api}/>));
+    const modes=host.querySelector('[aria-label="Preparation mode"]')!;
+    await click('Study',modes);
+    await act(async()=>{const input=host.querySelector('textarea')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Help me study DBMS');
+      input.dispatchEvent(new Event('input',{bubbles:true}));});
+    await act(async()=>{submit();await new Promise(resolve=>setTimeout(resolve,470));});
+    expect(host.textContent).not.toContain('How much time do you have');
+    expect(host.querySelector('.book-page-number')?.textContent).toMatch(/^Page 1 of /);
+    expect(requests.filter(req=>req.studyUnit)).toHaveLength(1);
+    await click('Next');
+    const secondPage=host.querySelector('#book-page-title')?.textContent;
+    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
+    await click('Previous');
+    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
+    await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Study navigation"]')!.click());
+    const toc=host.querySelector('[aria-label="Table of contents"]')!;
+    await act(async()=>toc.querySelectorAll('button')[1].click());
+    expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
+    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
+    await click('Last Minute',modes);
+    await act(async()=>submit());
+    await click('5 minutes');
+    expect(host.querySelector('.summary')?.textContent).toContain('5 min available');
+    await click('Study',modes);
+    expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
+    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
+    expect(api.analyze).toHaveBeenCalledTimes(1);
+  }finally{
+    await act(async()=>root.unmount());
+    host.remove();vi.unstubAllGlobals();history.replaceState(null,'',location.pathname);
+  }
 });

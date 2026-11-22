@@ -481,3 +481,13 @@ it('retains numeric and code inputs from verified pages, and keeps incomplete sc
   expect.objectContaining({historical:true,prompt:expect.stringContaining('10, 20 and 30 units'),learning:expect.objectContaining({type:'numerical'})}),
  ]));
 });
+
+it('uses a book page as context without letting it ground an unrelated follow-up',async()=>{
+  const {env,run}=setup();
+  run.mockResolvedValueOnce({response:'A haiku is a short form of poetry.'});
+  const response=await handle(post('coach',{mode:'auto',task:'chat',request:'What is a haiku?',
+    history:[{role:'user',content:'Explain this page.'},{role:'assistant',content:'Page replacement swaps out memory pages.'}],
+    sources:[{file:'Operating Systems.pdf',page:2,excerpt:'Page replacement swaps out memory pages.'}]}),env);
+  expect(await response.json()).toMatchObject({explanation:'A haiku is a short form of poetry.',sources:[]});
+  expect(run.mock.calls[0][1]).not.toHaveProperty('response_format');
+});
