@@ -73,9 +73,10 @@ function candidates(materials) {
           || (!heading && (unit||syllabusTable) && line.length>=12 && !/^(?:page\s|sl\.?\s*no\.?|contact hours|contents$)/i.test(line) ? line : ''));
         if (!question && !isTopic) continue;
         const base = question?.text ?? isTopic;
-        const {text,marks}=readMarks(base);
+        const {text,marks}=readMarks(base.replace(/\s+\(?CO\s*\d+(?:\s*[,/]\s*CO\s*\d+)*\)?\s*$/i,''));
         const scanned=page.method==='ocr';
         if(scanned&&ocrQuestionNeedsReview(text))continue;
+        if(material.kind==='Past paper'&&!/\?$/.test(text)&&/^(?:the\s+)?(?:number|value|average|total|maximum|minimum|order|sequence|contents)\s+of\b/i.test(text))continue;
         if (text.length<12 || text.length>480 || !tokens(text).length || /\b(?:and|or|of|the|for|using|with)\s*$/i.test(text)) continue;
         const key = exactQuestionKey(text);
         const source = {id:material.id+':'+page.number+':'+(n+1),file:material.name,page:page.number,number:!scanned&&question?.number||'Line '+(n+1),excerpt:line,documentIndex:material.documentIndex,method:page.method};
@@ -211,7 +212,8 @@ export function buildPlan(materials) {
     const reason=record.papers.size
       ? 'Found in '+record.papers.size+' of '+paperCount+' uploaded past papers'
       : record.syllabus?'Identified in the supplied syllabus':'Identified in the supplied study material';
-    const question={id:i+1,topic:record.topic,unit:record.unit||units[0]||0,prompt:record.prompt,minutes,priorityScore,scoreComponents,topicIds,
+    const concept=publicStudyConcepts(record.prompt)[0];
+    const question={id:i+1,topic:concept?concept[0].toUpperCase()+concept.slice(1):record.topic,unit:record.unit||units[0]||0,prompt:record.prompt,minutes,priorityScore,scoreComponents,topicIds,
       units,sections:[...record.sections],marksByGroup:record.marksByGroup,paperIds:[...record.papers],historicalFrequency:record.papers.size,historicalPaperCount:paperCount,examYears:[...record.years].sort(),
       marks:record.historical?record.historicalMarks:record.marks,historical:record.historical,reason,source,sources:record.sources,answerSource:note?{file:note.file,page:note.page,number:note.number,excerpt:note.excerpt,documentIndex:note.documentIndex,method:note.method}:null,
       answer:note?'Related notes excerpt · '+note.file+' · page '+note.page+'\n'+note.excerpt:'The supplied text identifies this question but provides no matching answer passage.'};

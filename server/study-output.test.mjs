@@ -325,3 +325,12 @@ it('generates practice wording only for known seeds, dropping unsupported histor
  ]}),env);
  expect(await response.json()).toEqual({questions:[{id:8,prompt:'Explain how deadlock prevention breaks a necessary condition.'}]});
 });
+
+it('drops a standalone OCR subpart while keeping a complete unusual exam question',async()=>{
+ const text='Q1(a). The number of page faults using FIFO, LRU, and Optimal page replacement algorithms.\nQ2. What is the maximum number of user requests that can be satisfied per second?';
+ const response=await handle(post('analyze',{materials:[{name:'OS 2025 paper.pdf',kind:'Past paper',
+   pages:[{number:2,method:'ocr',status:'extracted',text}]}],minutes:10}));
+ const {questions}=await response.json();
+ expect(questions).toHaveLength(1);
+ expect(questions[0]).toMatchObject({historical:true,prompt:expect.stringContaining('maximum number of user requests'),source:{page:2}});
+});
