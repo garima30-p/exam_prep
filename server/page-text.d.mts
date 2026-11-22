@@ -4,9 +4,11 @@ export function pageQuality(text:string,kind:string,confidence?:number|null):Pag
 export function chooseReading<T extends Reading>(current:T|null,next:T,kind:string):T;
 export function countQuestions(text:string,pastPaper?:boolean):number;
 export function countSupportedOcrQuestions(text:string,pastPaper:boolean):number;
-export function formatPageText(text:string,kind:string):string;
+export function formatPageText(text:string,kind:string,includeTechnicalData?:boolean):string;
+export function readMarks(text:string):{text:string;marks:number|null};
 export function findGutter(image:{data:Uint8ClampedArray;width:number;height:number}):number|null;
 export function scanScale(width:number,height:number,pixelBudget?:number):number;
 export function scanPasses(width:number,height:number,manual?:boolean):{rotation:number;filter:'raw'|'contrast'|'binary';layout:'auto'|'column'}[];
 export function enhanceScan<T extends {data:Uint8ClampedArray}>(image:T,binary?:boolean):T;
 export function readQuestionCue(line:string,pastPaper?:boolean):{number?:string;text:string}|null;
+export function questionRejection(text:string,method?:string):string|null;

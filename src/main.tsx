@@ -249,7 +249,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     ? plan.selectedQuestionIds.map(id=>optimization.data.candidates.find(question=>question.id===id)!)
     : fitQuestions(result ?? [],context.minutes);
   const visible=(remainingTime||context.minutes?fitted:result??[]).slice(0,limit);
-  const questionList=!sampleMode?(preparedScope?.questions??[]).map(question=>practice[question.id]?{...question,prompt:practice[question.id]}:question):visible.length?visible:(result??[]).slice(0,limit);
+  const questionList=!sampleMode?(preparedScope?.questions??[]).filter(question=>!question.practiceSeed||Boolean(practice[question.id])).map(question=>practice[question.id]?{...question,prompt:practice[question.id]}:question):visible.length?visible:(result??[]).slice(0,limit);
   const questionsOutsideBudget=Boolean(!sampleMode&&!preparedScope?.review&&!visible.length&&questionList.length);
   const plannedIds=new Set(fitted.map(question=>question.id));
   const tracked=optimization?.data.candidates.filter(question=>!plannedIds.has(question.id)&&progress[question.id])??[];
@@ -375,7 +375,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   async function revealQuestions(){
     setShowQuestions(true);
     if(sampleMode)return;
-    const candidates=(preparedScope?.questions??[]).filter(question=>!question.historical&&
+    const candidates=(preparedScope?.questions??[]).filter(question=>question.practiceSeed&&!question.historical&&
       !question.historicalFrequency&&!(question.sources??[question.source]).some(source=>files.some(file=>file.id===source.documentIndex&&file.kind==='Past paper')));
     if(!candidates.length)return;
     const operation=new AbortController();
@@ -395,7 +395,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           used.add(key(question.prompt));return [[question.id,question.prompt]];
         })));
       }
-    }catch{/* Keep syllabus practice questions available if generation fails. */}
+    }catch{/* Keep historical questions available if practice generation fails. */}
     finally{if(practiceRun.current===operation){practiceRun.current=null;setPracticePending(false);}}
   }
   async function loadQuestionAnswer(question:Question,key:string){
@@ -525,12 +525,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
 
           {showQuestions&&questionsOutsideBudget&&<p>These questions are available for reference. None fits the remaining preparation budget.</p>}
           {showQuestions&&questionList.map((question,index)=>renderQuestion(question,index))}
-          {showQuestions&&!questionList.length&&revision&&<article className="question">
+          {showQuestions&&!practicePending&&!questionList.length&&revision&&<article className="question">
             <p>Practice question · based on your study material</p><h3>{revision.recall}</h3>
             <details><summary>Show answer</summary><p>{revision.answer}</p></details>
             <button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button>
           </article>}
-          {showQuestions&&!questionList.length&&!revision&&<p>No supported questions were found.</p>}
+          {showQuestions&&!practicePending&&!questionList.length&&!revision&&<p>No reliable questions are available for these topics yet.</p>}
           {sampleMode&&showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>setLimit(current=>current+10)}>Show next 10</button>}
           {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
         </section></div>

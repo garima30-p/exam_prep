@@ -445,3 +445,39 @@ it('uses a general answer when notes are insufficient and the daily search cap b
   expect(run.mock.calls[1][1]).not.toHaveProperty('response_format');
  }finally{vi.unstubAllGlobals();}
 });
+
+it('retains reliable questions from partial papers and keeps syllabus headings as practice seeds',async()=>{
+ const syllabus='Details of the Course\nNo. Coprts Hou.\nUnit II: Process synchronization\nProcess Synchronization: Inter-process communication: Synchronization: The Critical.\nUnit III: Deadlock prevention';
+ const paper='(ii) Answer any two sub questions from a, b and c.\nQ1. Explain the four necessary conditions for deadlock.\nQ2. Find ifthe system is in a deadlock state\nQ3. Explain your answer.\nQ4. Explain the four necessary conditions for deadlock.';
+ const response=await handle(post('analyze',{minutes:120,materials:[
+  {name:'Syllabus',kind:'Syllabus',pages:[{number:1,text:syllabus,method:'ocr',status:'extracted'}]},
+  {name:'2024 Exam',kind:'Past paper',totalPages:2,complete:false,pages:[{number:1,text:paper,method:'ocr',status:'extracted'},
+   {number:2,text:'Q1. Explain virtual memory.',method:'ocr',status:'review'}]},
+ ]}));
+ const {questions,plan}=await response.json();
+ expect(questions.filter(q=>q.historical)).toEqual([expect.objectContaining({
+   prompt:'Explain the four necessary conditions for deadlock.',
+   source:expect.objectContaining({file:'2024 Exam',page:1}),
+   historicalFrequency:0,practiceSeed:false,scoreComponents:expect.objectContaining({historical:1}),
+ })]);
+ expect(questions.filter(q=>q.practiceSeed).map(q=>q.topic)).toEqual(expect.arrayContaining(['Process synchronization','Deadlock prevention']));
+ const prompts=questions.map(q=>q.prompt).join('\n');
+ expect(prompts).not.toMatch(/Coprts|The Critical|Find ifthe|answer any|virtual memory/i);
+ expect(questions.filter(q=>plan.selectedQuestionIds.includes(q.id)).some(q=>q.historical)).toBe(true);
+});
+
+it('retains numeric and code inputs from verified pages, and keeps incomplete scan inputs out',async()=>{
+ const code='A process executes the following code:\n{\nfork();\nprintf("Hello");\nfork();\n}\nHow many child processes are created, and what is printed?';
+ const arithmetic='Q2. Calculate average waiting time for three jobs of length 10, 20 and 30 units.';
+ const scanned='Q1. How many page faults would occur assuming three frames? (1) LRU Replacement:';
+ const response=await handle(post('analyze',{materials:[{name:'Exam',kind:'Past paper',pages:[
+  {number:1,method:'manual',status:'verified',text:code+'\n'+arithmetic},
+  {number:2,method:'ocr',status:'extracted',text:scanned}
+ ]}]}));
+ const {questions}=await response.json();
+ expect(questions).toHaveLength(2);
+ expect(questions).toEqual(expect.arrayContaining([
+  expect.objectContaining({historical:true,prompt:expect.stringContaining('fork(); printf("Hello"); fork();'),learning:expect.objectContaining({type:'code'})}),
+  expect.objectContaining({historical:true,prompt:expect.stringContaining('10, 20 and 30 units'),learning:expect.objectContaining({type:'numerical'})}),
+ ]));
+});

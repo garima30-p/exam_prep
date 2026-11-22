@@ -17,7 +17,7 @@ it('ranks real extracted questions, counts distinct papers, and resolves answer 
   const {questions}=await result.json();
   expect(questions).toHaveLength(2);
   expect(questions[0]).toMatchObject({
-    marks:10,reason:'Found in 2 of 2 uploaded past papers',
+    marks:10,reason:'Found in 2 of 2 complete uploaded past papers',
     source:{file:'old.pdf',page:2,number:'1',documentIndex:23},answerSource:{file:'notes.pdf',page:1}
   });
 });

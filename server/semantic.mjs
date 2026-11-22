@@ -66,7 +66,7 @@ function combine(members,topics) {
     return available.length?Math.max(...available):null;
   };
   const minutes=initialMinutes(marks);
-  const scoreComponents={recurrence,marks:strongest('marks'),syllabus:strongest('syllabus'),
+  const scoreComponents={historical:strongest('historical'),recurrence,marks:strongest('marks'),syllabus:strongest('syllabus'),
     breadth:known.length?Math.min(known.length,4)/4:null,recency:strongest('recency'),preparationTime:(30-minutes)/15};
   const withNotes=members.find(question=>question.answerSource)??first;
   const merged={...representative,id:first.id,sources,paperIds,topicIds,marks,minutes,marksByGroup,scoreComponents,priorityScore:scorePriority(scoreComponents),

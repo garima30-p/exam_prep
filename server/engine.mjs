@@ -1,10 +1,10 @@
 import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, diagnoseSearchQuota, generateStudyReply, webSearchStatus } from './study-ai.mjs';
-import { administrativeLine, administrativeSection, syllabusContentsHeading, syllabusEnd, syllabusUnit } from './study-material.mjs';
+import { administrativeLine, administrativeSection, syllabusContentsHeading, syllabusEnd, syllabusTopicLabel, syllabusUnit } from './study-material.mjs';
 import { describeLearning, makeLearningPlan } from './learning.mjs';
 import { exactQuestionKey } from './semantic.mjs';
 import { initialMinutes, scorePriority } from './evidence.mjs';
 import { publicStudyConcepts } from './coach-topics.mjs';
-import { formatPageText, ocrQuestionNeedsReview, readMarks, readQuestionCue } from './page-text.mjs';
+import { formatPageText, paperQuestionText, questionRejection, readMarks, readQuestionCue } from './page-text.mjs';
 
 const MAX_BODY = 4_000_000;
 const compact = value => typeof value === 'string' ? value.replace(/\s+/g,' ').trim() : '';
@@ -23,8 +23,8 @@ function topicTitle(text) {
   return title[0].toUpperCase()+title.slice(1);
 }
 
-function materialLines(text, kind) {
-  const lines=(kind==='Past paper'?formatPageText(text,kind):text).split(/\r?\n/);
+function materialLines(text, kind,method) {
+  const lines=(kind==='Past paper'?formatPageText(text,kind,method==='manual'||method==='pdf-text'||method==='office-text'):text).split(/\r?\n/);
   if(kind!=='Notes')return lines;
   for(let index=0;index<lines.length;index++){
     if(!solvedHeading.test(compact(lines[index])))continue;
@@ -49,7 +49,7 @@ function candidates(materials) {
     let section = '';
     const year=Number(material.name.match(/\b(?:19|20)\d{2}\b|(?<=_)\d{4}(?=[_.])/g)?.find(value=>/^(19|20)/.test(value)))||Number(material.kind==='Past paper'&&material.pages[0]?.text.slice(0,1100).match(/\b(?:examination|exam)\b[^\n]{0,55}\b((?:19|20)\d{2})\b/i)?.[1])||0;
     for (const page of material.pages) {
-      const lines = materialLines(page.text,material.kind);
+      const lines = materialLines(page.text,material.kind,page.method);
       for (let n=0; n<lines.length; n++) {
         const line = compact(lines[n]);
         if(administrativeLine(line))continue;
@@ -68,22 +68,24 @@ function candidates(materials) {
           prerequisites.set(unit,[...new Set([...(prerequisites.get(unit)??[]),...prerequisiteLine[1].split(/[,;]/).map(item=>item.trim()).filter(Boolean)])].slice(0,4));
           continue;
         }
-        const question = boilerplate.test(line)||(structured&&!solvedHeading.test(line))?null:readQuestionCue(line,material.kind==='Past paper');
-        const isTopic = material.kind==='Syllabus' && (heading?.[2] || line.match(/^[-•]\s+(.+)/)?.[1]
-          || (!heading && (unit||syllabusTable) && line.length>=12 && !/^(?:page\s|sl\.?\s*no\.?|contact hours|contents$)/i.test(line) ? line : ''));
-        if (!question && !isTopic) continue;
-        const base = question?.text ?? isTopic;
+        const syllabus=material.kind==='Syllabus';
+        const paper=material.kind==='Past paper';
+        const bullet=line.match(/^[-•]\s+(.+)/)?.[1];
+        const label=syllabus&&(heading||bullet||unit||syllabusTable)
+          ?syllabusTopicLabel(heading?heading[2]:bullet??line,Boolean(heading||bullet)):'';
+        const question=syllabus||boilerplate.test(line)||(structured&&!solvedHeading.test(line))?null:readQuestionCue(line,paper);
+        if(!question&&!label)continue;
+        const base=question?(paper?paperQuestionText(question.text):question.text):label;
         const {text,marks}=readMarks(base.replace(/\s+\(?CO\s*\d+(?:\s*[,/]\s*CO\s*\d+)*\)?\s*$/i,''));
         const scanned=page.method==='ocr';
-        if(scanned&&ocrQuestionNeedsReview(text))continue;
-        if(material.kind==='Past paper'&&!/\?$/.test(text)&&/^(?:the\s+)?(?:number|value|average|total|maximum|minimum|order|sequence|contents)\s+of\b/i.test(text))continue;
-        if (text.length<12 || text.length>480 || !tokens(text).length || /\b(?:and|or|of|the|for|using|with)\s*$/i.test(text)) continue;
+        if(question&&questionRejection(text,page.method))continue;
+        if(!tokens(text).length)continue;
         const key = exactQuestionKey(text);
         const source = {id:material.id+':'+page.number+':'+(n+1),file:material.name,page:page.number,number:!scanned&&question?.number||'Line '+(n+1),excerpt:line,documentIndex:material.documentIndex,method:page.method};
         let record = questions.get(key);
         if (!record) {
           if (questions.size>=500) continue;
-          record={prompt:isTopic && !question?'Explain '+text.replace(/\.$/,'')+'.':text,topic:topicTitle(text),unit,units:new Set(),sections:new Set(),marks:0,marksByGroup:{},sources:[],papers:new Set(),years:new Set(),syllabus:false,historical:false};
+          record={prompt:question?text:'Explain '+text+'.',topic:topicTitle(text),unit,units:new Set(),sections:new Set(),marks:0,marksByGroup:{},sources:[],papers:new Set(),years:new Set(),syllabus:false,historical:false,practiceSeed:!question};
           questions.set(key,record);
         }
         record.sources.push(source);
@@ -105,7 +107,7 @@ function candidates(materials) {
         if (material.kind==='Syllabus') record.syllabus=true;
         if (material.kind==='Past paper'&&question){
           if(!record.historical){record.historicalSource=source;record.historicalMarks=scanned?0:marks??0;record.prompt=text;record.topic=topicTitle(text);}
-          record.historical=true;if(year)record.years.add(year);
+          record.historical=true;record.practiceSeed=false;if(year)record.years.add(year);
         }
       }
     }
@@ -187,6 +189,7 @@ export function buildPlan(materials) {
     }
     const minutes=initialMinutes(record.marks);
     const scoreComponents={
+      historical:record.historical?1:null,
       recurrence:paperCount?record.papers.size/paperCount:null,
       marks:record.marks?record.marks/maxMarks:null,
       syllabus:knownTopics.length?Number(matching.length>0):null,
@@ -209,13 +212,15 @@ export function buildPlan(materials) {
       .filter(match=>match.score>0)
       .sort((a,b)=>b.score-a.score)[0]?.candidate;
     const source=record.historicalSource??record.sources[0];
+    const relevant=scoreComponents.syllabus===1&&record.historical?' and matches the syllabus':'';
     const reason=record.papers.size
-      ? 'Found in '+record.papers.size+' of '+paperCount+' uploaded past papers'
-      : record.syllabus?'Identified in the supplied syllabus':'Identified in the supplied study material';
+      ? 'Found in '+record.papers.size+' of '+paperCount+' complete uploaded past papers'+relevant
+      : record.historical?'Found on a usable page of an uploaded past paper'+relevant+'; incomplete papers do not count toward frequency'
+      : record.syllabus?'Practice based on the uploaded syllabus':'Identified in the supplied study material';
     const concept=publicStudyConcepts(record.prompt)[0];
     const question={id:i+1,topic:concept?concept[0].toUpperCase()+concept.slice(1):record.topic,unit:record.unit||units[0]||0,prompt:record.prompt,minutes,priorityScore,scoreComponents,topicIds,
       units,sections:[...record.sections],marksByGroup:record.marksByGroup,paperIds:[...record.papers],historicalFrequency:record.papers.size,historicalPaperCount:paperCount,examYears:[...record.years].sort(),
-      marks:record.historical?record.historicalMarks:record.marks,historical:record.historical,reason,source,sources:record.sources,answerSource:note?{file:note.file,page:note.page,number:note.number,excerpt:note.excerpt,documentIndex:note.documentIndex,method:note.method}:null,
+      marks:record.historical?record.historicalMarks:record.marks,historical:record.historical,practiceSeed:record.practiceSeed,reason,source,sources:record.sources,answerSource:note?{file:note.file,page:note.page,number:note.number,excerpt:note.excerpt,documentIndex:note.documentIndex,method:note.method}:null,
       answer:note?'Related notes excerpt · '+note.file+' · page '+note.page+'\n'+note.excerpt:'The supplied text identifies this question but provides no matching answer passage.'};
     const requiredConcepts=[...new Set(units.flatMap(unit=>prerequisites.get(unit)??[]))].slice(0,4);
     return {...question,learning:describeLearning({...question,prerequisites:requiredConcepts},[...topics.values()])};

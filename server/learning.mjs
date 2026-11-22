@@ -5,6 +5,7 @@ const profiles={
   explanation:{minutes:[6,4,3],steps:['State the central idea in your own words.','Explain the key steps or relationships in order.','Work through an example if the question calls for one.','Reproduce the explanation without notes.']},
   comparison:{minutes:[6,5,3],steps:['Define the items being compared.','Choose consistent criteria and compare both items against each criterion.','Reconstruct the comparison from memory.']},
   numerical:{minutes:[12,13,5],steps:['Identify the givens, unknowns and applicable method.','Recall the relevant formula or algorithm and when it applies.','Work a representative calculation without following a solved example.','Check units, assumptions and the result.']},
+  code:{minutes:[9,12,5],steps:['Read the program, inputs and execution assumptions.','Trace the control flow and track program state or output.','Check the result on the specified case.','Reproduce the trace without notes.']},
   derivation:{minutes:[14,12,6],steps:['Identify the starting assumptions and target result.','Reproduce the derivation step by step and justify each transition.','Redo the derivation from memory and check the final expression.']},
   diagram:{minutes:[9,10,5],steps:['Identify the components and their relationships.','Draw and label the diagram without copying.','Check that the labels and connections explain the requested process.']},
   application:{minutes:[12,12,6],steps:['Identify the problem requirements and constraints.','Select a method and justify why it fits.','Apply the method to the scenario without referring to a worked solution.','Check the result against the original requirements.']}
@@ -20,6 +21,7 @@ export function familiarityFrom(text) {
 function questionType(prompt) {
   if(/\b(derive|prove|deduce)\b/i.test(prompt))return 'derivation';
   if(/\b(calculate|compute|solve|numerical|evaluate the value)\b/i.test(prompt))return 'numerical';
+  if(/\b(?:code|program|pseudocode)\b/i.test(prompt)&&/\b(?:write|trace|correct|output|debug|execut(?:e|es))\b/i.test(prompt))return 'code';
   if(/\b(draw|sketch|diagram|plot|label the)\b/i.test(prompt))return 'diagram';
   if(/\b(compare|contrast|differentiate|distinguish)\b/i.test(prompt))return 'comparison';
   if(/\b(design|implement|apply|construct|demonstrate)\b/i.test(prompt))return 'application';
@@ -59,9 +61,12 @@ export function describeLearning(question,topics=[]) {
       phase:'understanding',label:'Notes-linked',source:question.answerSource});
   }
   const prereqs=question.prerequisites??[];
+  const followupTasks=question.prompt.match(/[?.;]\s*(?:what|how|why|explain|discuss|compare|find|calculate|show|provide|draw|write)\b/gi)?.length??0;
+  const extra=Math.min(4,followupTasks+Math.max(0,linked.length-1));
+  const baseMinutes=profile.minutes.map((minutes,index)=>minutes+(index===0?extra:index===1?extra*2:Math.ceil(extra/2)));
   return {type,checkpoints,prerequisites:prereqs,
-    difficulty:type==='derivation'||type==='numerical'||question.marks>=10||linked.length>=3?'higher':'standard',
-    material:question.answerSource?'notes':linked.length?'syllabus':'question-only',baseMinutes:profile.minutes};
+    difficulty:type==='derivation'||type==='numerical'||type==='code'||question.marks>=10||extra>=3?'higher':'standard',
+    material:question.answerSource?'notes':linked.length?'syllabus':'question-only',baseMinutes};
 }
 
 export function learningEffort(question,familiarity='unknown',progress={}) {

@@ -8,8 +8,9 @@ export const readQuestionCue=(line,pastPaper=false)=>{
   if(solved)return {number:solved[1].replace(/\s+/g,''),text:solved[2]};
   const command=line.match(QUESTION);
   const numbered=!command&&pastPaper?line.match(NUMBERED):null;
+  const contextual=!command&&!numbered&&pastPaper&&/^(?:consider\b|given\b|suppose\b|assume\b|(?:an? |the )?(?:process|program)\s+(?:executes|runs|contains)\b).{12,}(?:\?|[.;:]\s*(?:calculate|compute|find|show|write)\b)/i.test(line);
   const number=(command?.[1]??command?.[2]??numbered?.[1])?.replace(/\s+/g,'');
-  return command?{number,text:command[3]}:numbered?{number,text:numbered[2]}:null;
+  return command?{number,text:command[3]}:numbered?{number,text:numbered[2]}:contextual?{text:line}:null;
 };
 export function countQuestions(text,pastPaper=true) {
   return text.split(/\r?\n/).filter(line=>!HEADER.test(line.trim())&&readQuestionCue(line.trim(),pastPaper)).length;
@@ -25,12 +26,12 @@ export function countSupportedOcrQuestions(text,pastPaper) {
   return text.split(/\r?\n/).reduce((count,line)=>{
     const candidate=readQuestionCue(line.trim(),pastPaper);
     if(!candidate)return count;
-    const statement=readMarks(candidate.text).text;
-    return count+Number(statement.length>=12&&statement.length<=480&&!ocrQuestionNeedsReview(statement));
+    const statement=readMarks(paperQuestionText(candidate.text)).text;
+    return count+Number(!questionRejection(statement,'ocr'));
   },0);
 }
 
-export function formatPageText(text,kind) {
+export function formatPageText(text,kind,includeTechnicalData=false) {
   if(kind!=='Past paper')return text.trim();
   const result=[];
   let active=-1;
@@ -45,7 +46,15 @@ export function formatPageText(text,kind) {
       result.push(line);
       continue;
     }
-    if(readQuestionCue(line,true)){
+    const codeStem=includeTechnicalData&&/^(?:an? |the )?(?:process|program)\s+(?:executes|runs|contains)\s+the following\s+(?:code|program)\b/i.test(line);
+    const technical=includeTechnicalData&&active>=0&&/\b(?:following|given|below)\b.{0,48}\b(?:code|program|table)\b/i.test(result[active]);
+    const cue=readQuestionCue(line,true);
+    if(technical&&result[active].length+line.length<1200&&
+      (!cue&&/[\t|{};]|\w+\s{3,}\w+/.test(source)||cue&&!cue.number&&/^(?:how many|what (?:is|are|would|will)|calculate|find)\b/i.test(cue.text))){
+      result[active]+=' '+line;
+      continue;
+    }
+    if(cue||codeStem){
       active=result.length;result.push(line);
     } else if(active>=0&&result[active].length+line.length<1200&&
         !/^\((?:[a-z]|[ivx]+)\)\s/i.test(line)&&!/^\(?CO\d+\)?$/i.test(line)&&
@@ -60,8 +69,8 @@ export function formatPageText(text,kind) {
 }
 
 export function ocrQuestionNeedsReview(text) {
-  return /\b(?:(?:following|given)\s+(?:table|diagram|figure|graph|program|code|(?:page[- ]?)?reference string)|(?:table|diagram|figure|graph)\s+(?:below|given|shown)|calculate|compute|derive|numerical)\b/i.test(text)||
-    /\d|[=≤≥±×÷√∑]/.test(text.replace(/\(CO\s*\d+(?:\s*,\s*CO\s*\d+)*\)/gi,''));
+  return /\b(?:how many page faults|disk head (?:movement|position)|(?:following|given)\s+(?:table|diagram|figure|graph|program|code|(?:page[- ]?)?reference string)|(?:table|diagram|figure|graph)\s+(?:below|given|shown)|calculate|compute|derive|numerical)\b/i.test(text)||
+    /(?:\d\s*[%=]|[≤≥±×÷√∑]|\d+(?:\s*[,|]\s*\d+){2,}|\b\d+\s*(?:ms|mb|kb|frames|units)\b)/i.test(text);
 }
 
 /** Locate a low-ink gutter on an upright landscape scan with text on both sides. */
@@ -170,4 +179,35 @@ export function enhanceScan(image,binary=false) {
     data[i]=data[i+1]=data[i+2]=value;
   }
   return image;
+}
+
+const vagueFollowUp=/^(?:explain|justify|give reasons for)\s+(?:(?:your|the)\s+)?(?:answer|reasoning|choice)[.!?]?$/i;
+const incompleteTail=/\b(?:and|or|of|the|for|using|with|following|critical|correct|below|shown)\s*[.,:;]?\s*$/i;
+const examMetadata=/^(?:\(?[ivx]+\)?[.)]?\s*)?(?:answer (?:any|all|only)|attempt (?:any|all|only)|(?:each|all)\s+(?:sub[- ]?)?questions?\b|total\s+marks\b|roll\s*(?:no|number)\b|page\s+\d+\b|set (?:os|the operating system) mode\b)/i;
+
+export function paperQuestionText(text) {
+  // OCR can join the introduction to a new code problem to an already complete question.
+  return text.replace(/(\?)\s*\.?\s+(?:A|The)\s+(?:process|program)\s+(?:executes|runs|contains)\s+the\s+following\b[\s\S]*$/i,'$1');
+}
+
+export function questionRejection(text,method) {
+  if(examMetadata.test(text)||/^(?:explain|describe|define|discuss)\s+(?:no\.|(?:sl\.\s*)?no of\b|course outcomes?\b|contact hours?\b)/i.test(text))return 'administrative';
+  if(text.length<12||text.length>1200||!/[a-z]{2,}/i.test(text)||incompleteTail.test(text)||vagueFollowUp.test(text))
+    return 'incomplete';
+  if(/^(?:the\s+)?(?:number|value|average|total|maximum|minimum|order|sequence|contents)\s+of\b/i.test(text)&&!/\?$/.test(text))
+    return 'incomplete';
+  if(!readQuestionCue(text)&&!/\b(?:what|why|how|which|can|does|is|find|calculate|compute|determine|explain|write|show)\b[^.!?]{3,}[?]/i.test(text)
+    &&!/[.;:]\s*(?:calculate|compute|find|show|write|determine)\b.{4,}/i.test(text))
+    return 'incomplete';
+  if(method==='ocr'){
+    const listMarkers=text.match(/\b(?:i{1,3}|i[l1]|iv|v)\.\s+[a-z]/gi)??[];
+    if(/[\uFFFD¢§]|[|{}]{2,}/u.test(text)||listMarkers.length>=2)return 'ocr_corruption';
+    if(/^(?:can\s+(?:deadlock|indefinite blocking)\s+occur\b|(?:find|determine)\s+(?:if\s*the|whether\s+(?:the|this))\s+system\b)/i.test(text))
+      return 'missing_context';
+    if(ocrQuestionNeedsReview(text))return 'unverified_inputs';
+    // A question about the result of code must contain that code or be verified at the source.
+    if(/\b(?:child processes|output)\b/i.test(text)&&/\b(?:created|output|printed|code)\b/i.test(text))
+      return 'unverified_inputs';
+  }
+  return null;
 }

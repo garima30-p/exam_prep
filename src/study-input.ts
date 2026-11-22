@@ -1,8 +1,8 @@
 import type { Material } from './api';
 import type { ExtractedDocument } from './document-state';
 import { isTrusted } from './document-state';
-import { readQuestionCue } from '../server/page-text.mjs';
-import { administrativeLine, administrativeSection, syllabusContentsHeading, syllabusEnd, syllabusUnit } from '../server/study-material.mjs';
+import { questionRejection, readMarks, readQuestionCue } from '../server/page-text.mjs';
+import { administrativeLine, administrativeSection, syllabusContentsHeading, syllabusEnd, syllabusTopicLabel, syllabusUnit } from '../server/study-material.mjs';
 import { studySubject } from '../server/coach-topics.mjs';
 
 function academicLines(lines:string[]) {
@@ -27,14 +27,14 @@ export function inspectStudyInput(documents:readonly ExtractedDocument[],files:r
     const header=lines.slice(0,18).filter(line=>!administrativeLine(line)).join(' ');
     const subject=studySubject(header)||studySubject(content);
     if(subject)subjects.set(subject,(subjects.get(subject)??0)+1);
-    const questionCount=academic.filter(line=>readQuestionCue(line,true)).length;
+    const questionCount=academic.filter(line=>{const cue=readQuestionCue(line,true);return cue&&!questionRejection(readMarks(cue.text).text);}).length;
     const unitCount=academic.filter(line=>syllabusUnit(line)).length;
     const examHeader=/\b(?:end[ -]?sem(?:ester)?|mid[ -]?sem(?:ester)?|question paper|examination)\b/i.test(header);
     const syllabusHeader=lines.some(syllabusContentsHeading)||/\b(?:syllabus|course outline|course contents?)\b/i.test(header);
     const explained=academic.filter(line=>line.length>=30&&/\b(?:is|are|occurs|uses|allows|works|means|prevents|requires|evicts)\b/i.test(line)&&!readQuestionCue(line)).length;
     const kind=!lines.some(Boolean)?'Unreadable':!academic.length?'Administrative':
       (unitCount>=2||syllabusHeader&&(unitCount>0||academic.length>=5))&&(!examHeader||questionCount<3)?'Syllabus':
-      (examHeader&&questionCount>0||questionCount>=3&&explained===0)?'Past paper':
+      (examHeader&&questionCount>0||file.kind==='Past paper'&&questionCount>=2||questionCount>=3&&explained===0)?'Past paper':
       explained>0?'Notes':file.kind;
     const classifiedKind=file.kindOverride?file.kind:kind;
     if(classifiedKind==='Syllabus'){
@@ -44,8 +44,8 @@ export function inspectStudyInput(documents:readonly ExtractedDocument[],files:r
         if(syllabusEnd(line))break;
         if(syllabusContentsHeading(line)){inUnit=true;continue;}
         if(header)inUnit=true;
-        const title=(header?header[2]:inUnit?line:'').trim().replace(/^[-•]\s*/,'');
-        if(title.length>=4&&title.length<=180&&/[A-Za-z]{3}/.test(title)&&!readQuestionCue(title))titles.add(title);
+        const title=syllabusTopicLabel(header?header[2]:inUnit?line:'',Boolean(header||/^[-•]\s/.test(line)));
+        if(title&&!readQuestionCue(title))titles.add(title);
         if(titles.size>=16)break;
       }
     }

@@ -1,6 +1,6 @@
 // Only catalog labels may leave the Worker as automatic search terms.
 const groups=[
- ['operating systems',['deadlock prevention','deadlock avoidance',"banker’s algorithm",'deadlock','page replacement','fifo','lru','virtual memory','paging','segmentation','process scheduling','cpu scheduling','process management','operating system structures','file systems','disk scheduling','memory management','semaphore','mutex','race condition','thrashing','process synchronization']],
+ ['operating systems',['deadlock prevention','deadlock avoidance',"banker’s algorithm",'deadlock','page replacement','fifo','lru','virtual memory','paging','segmentation','process scheduling','cpu scheduling','process management','operating system structures','system calls','boot sequence','privileged instructions','file systems','disk scheduling','memory management','semaphore','mutex','race condition','thrashing','process synchronization']],
  ['databases',['database normalization','normalization','functional dependency','third normal form','bcnf','acid properties','serializability','sql joins','database indexing','transactions','er diagram']],
  ['computer networks',['tcp congestion control','tcp','udp','osi model','subnetting','dns','routing','flow control','http','network address translation']],
  ['data structures and algorithms',['binary search tree','binary search','dijkstra','dynamic programming','breadth first search','depth first search','merge sort','quick sort','hash table','time complexity','linked list']],
@@ -65,4 +65,12 @@ export function summarySearchTopic(subject,topics){
  return department?[department,...concepts,'study guide'].join(' ').slice(0,100):'';
 }
 
-export const publicStudyConcepts=text=>catalog.filter(({concept})=>contains(text,concept)).map(item=>item.concept);
+const aliases=[
+ ['process synchronization',/\b(?:[ce]ritical section|peterson[’']?s? solution)\b/i],
+ ['boot sequence',/\b(?:booting|boot sequence)\b/i],
+ ['system calls',/\bsystem calls?\b/i],
+];
+export const publicStudyConcepts=text=>[...new Set([
+ ...catalog.filter(({concept})=>contains(text,concept)).map(item=>item.concept),
+ ...aliases.filter(([,pattern])=>pattern.test(text)).map(([concept])=>concept),
+])];
