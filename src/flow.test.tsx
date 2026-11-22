@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { App } from './main';
+import { prepareScope } from './preparation-scope';
 import { demoApi, fixture } from './api';
 import type { ExamApi, RankedQuestion } from './api';
 import { makeLearningPlan } from '../server/learning.mjs';
@@ -109,6 +110,7 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
     field.dispatchEvent(new Event('input',{bubbles:true}));
   };
   const submit=(selector:string)=>host.querySelector(selector)!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+  const reveal=()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click();
   try {
     await act(async()=>root.render(<App api={api}/>));
     await act(async()=>input('textarea','My DBMS exam is tomorrow. I have 67 minutes. Summarize my notes: Normalization reduces duplicated data.'));
@@ -119,6 +121,9 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
     await act(async()=>input('[aria-label="Ask about your plan"]','I only have 45 minutes now.'));
     await act(async()=>submit('.coach form'));
     await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
+    expect(host.querySelector('#results-title')).toBeNull();
+    await act(async()=>submit('.composer'));
+    await act(async()=>reveal());
     expect(host.querySelector('.question h3')?.textContent).toBe(questions[0].prompt);
     expect(host.querySelector('.question .source')?.textContent).toContain('p. 1 · Q1');
     const checkpoint=host.querySelector<HTMLSelectElement>('.question select')!;
@@ -130,11 +135,36 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
     await act(async()=>input('[aria-label="Ask about your plan"]','I have only 44 minutes left.'));
     await act(async()=>submit('.coach form'));
     await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
+    expect(host.querySelector('#results-title')).toBeNull();
+    await act(async()=>submit('.composer'));
+    await act(async()=>reveal());
     expect(host.querySelector<HTMLSelectElement>('.question select')?.value).toBe('completed');
-    expect(host.querySelector('.question summary')?.textContent).toContain('1/3 checkpoints');
+    expect(host.querySelector('.question details:last-of-type summary')?.textContent).toContain('1/3 checkpoints');
     expect(calls).toBe(1);
   } finally {
     await act(async()=>root.unmount());
     host.remove();
   }
+});
+
+it('chooses syllabus-aligned review over a cheap unrelated question in ten minutes',()=>{
+ const [rare,aligned]=fixture;
+ const candidates:RankedQuestion[]=[rare,aligned].map((question,index)=>({...question,
+  topicIds:[index?'syllabus:deadlock':'question:throughput'],priorityScore:index?60:200,
+  historicalFrequency:1,historicalPaperCount:2,examYears:[2025],scoreComponents:{},
+  learning:{type:'explanation',prerequisites:[],difficulty:'standard',material:'question-only',
+    baseMinutes:index?[12,5,3]:[2,2,1],checkpoints:[
+      {id:'1',text:'Explain',label:'Type guide',phase:'understanding'},
+      {id:'2',text:'Practice',label:'Type guide',phase:'practice'},
+      {id:'3',text:'Recall',label:'Type guide',phase:'recall'},
+    ]},
+ }));
+ const topics=[{id:'syllabus:deadlock',title:'Deadlock',weight:1.5},{id:'question:throughput',title:'Throughput',weight:1}];
+ const context=demoApi.parse('My Operating Systems exam is tomorrow. I have only 10 minutes.');
+ const plan=makeLearningPlan(candidates,topics,context.minutes,'',context.familiarity);
+ expect(plan.selectedQuestionIds).toEqual([rare.id]);
+ const selected=prepareScope({questions:candidates,warnings:[],optimization:{candidates,topics,plan}},context);
+ expect(selected.questions.map(q=>q.id)).toEqual([aligned.id]);
+ expect(selected.review).toBe(true);
+ expect(selected.allocations[aligned.id]+1).toBeLessThanOrEqual(10);
 });

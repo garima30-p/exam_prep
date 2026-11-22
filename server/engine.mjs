@@ -3,7 +3,8 @@ import { administrativeLine, administrativeSection, syllabusContentsHeading, syl
 import { describeLearning, makeLearningPlan } from './learning.mjs';
 import { exactQuestionKey } from './semantic.mjs';
 import { initialMinutes, scorePriority } from './evidence.mjs';
-import { ocrQuestionNeedsReview, readMarks, readQuestionCue } from './page-text.mjs';
+import { publicStudyConcepts } from './coach-topics.mjs';
+import { formatPageText, ocrQuestionNeedsReview, readMarks, readQuestionCue } from './page-text.mjs';
 
 const MAX_BODY = 4_000_000;
 const compact = value => typeof value === 'string' ? value.replace(/\s+/g,' ').trim() : '';
@@ -23,7 +24,7 @@ function topicTitle(text) {
 }
 
 function materialLines(text, kind) {
-  const lines=text.split(/\r?\n/);
+  const lines=(kind==='Past paper'?formatPageText(text,kind):text).split(/\r?\n/);
   if(kind!=='Notes')return lines;
   for(let index=0;index<lines.length;index++){
     if(!solvedHeading.test(compact(lines[index])))continue;
@@ -46,7 +47,7 @@ function candidates(materials) {
     let unit = 0;
     let syllabusTable=false;
     let section = '';
-    const year=Number(material.name.match(/\b(?:19|20)\d{2}\b|(?<=_)\d{4}(?=[_.])/g)?.find(value=>/^(19|20)/.test(value)))||0;
+    const year=Number(material.name.match(/\b(?:19|20)\d{2}\b|(?<=_)\d{4}(?=[_.])/g)?.find(value=>/^(19|20)/.test(value)))||Number(material.kind==='Past paper'&&material.pages[0]?.text.slice(0,1100).match(/\b(?:examination|exam)\b[^\n]{0,55}\b((?:19|20)\d{2})\b/i)?.[1])||0;
     for (const page of material.pages) {
       const lines = materialLines(page.text,material.kind);
       for (let n=0; n<lines.length; n++) {
@@ -75,13 +76,13 @@ function candidates(materials) {
         const {text,marks}=readMarks(base);
         const scanned=page.method==='ocr';
         if(scanned&&ocrQuestionNeedsReview(text))continue;
-        if (text.length<12 || text.length>480 || !tokens(text).length) continue;
+        if (text.length<12 || text.length>480 || !tokens(text).length || /\b(?:and|or|of|the|for|using|with)\s*$/i.test(text)) continue;
         const key = exactQuestionKey(text);
         const source = {id:material.id+':'+page.number+':'+(n+1),file:material.name,page:page.number,number:!scanned&&question?.number||'Line '+(n+1),excerpt:line,documentIndex:material.documentIndex,method:page.method};
         let record = questions.get(key);
         if (!record) {
           if (questions.size>=500) continue;
-          record={prompt:isTopic && !question?'Explain '+text.replace(/\.$/,'')+'.':text,topic:topicTitle(text),unit,units:new Set(),sections:new Set(),marks:0,marksByGroup:{},sources:[],papers:new Set(),years:new Set(),syllabus:false};
+          record={prompt:isTopic && !question?'Explain '+text.replace(/\.$/,'')+'.':text,topic:topicTitle(text),unit,units:new Set(),sections:new Set(),marks:0,marksByGroup:{},sources:[],papers:new Set(),years:new Set(),syllabus:false,historical:false};
           questions.set(key,record);
         }
         record.sources.push(source);
@@ -101,6 +102,10 @@ function candidates(materials) {
           if(year)record.years.add(year);
         }
         if (material.kind==='Syllabus') record.syllabus=true;
+        if (material.kind==='Past paper'&&question){
+          if(!record.historical){record.historicalSource=source;record.historicalMarks=scanned?0:marks??0;record.prompt=text;record.topic=topicTitle(text);}
+          record.historical=true;if(year)record.years.add(year);
+        }
       }
     }
   }
@@ -160,7 +165,7 @@ export function buildPlan(materials) {
   const knownTopics=records.filter(record=>record.syllabus).map(record=>{
     const id='syllabus:'+normalize(record.topic);
     topics.set(id,{id,title:record.topic,unit:record.unit||undefined,weight:1});
-    return {id,words:tokens(record.topic),unit:record.unit};
+    return {id,words:tokens(record.topic),concepts:publicStudyConcepts(record.prompt),unit:record.unit};
   });
   const maxMarks=Math.max(1,...records.map(record=>record.marks));
   const years=records.flatMap(record=>[...record.years]);
@@ -168,8 +173,9 @@ export function buildPlan(materials) {
   const latest=years.length?Math.max(...years):0;
   const prepared=records.map(record=>{
     const words=tokens(record.prompt);
-    const matching=knownTopics.filter(topic=>topic.words.length && overlaps(words,topic.words)===topic.words.length &&
-      (topic.words.length>=2||record.syllabus));
+    const concepts=publicStudyConcepts(record.prompt);
+    const matching=knownTopics.filter(topic=>topic.concepts.some(concept=>concepts.includes(concept))||
+      (topic.words.length>=2||record.syllabus)&&overlaps(words,topic.words)===topic.words.length);
     const inferred='question:'+words.slice().sort().join(' ');
     const topicIds=[...new Set(matching.length?matching.map(topic=>topic.id):[inferred])].slice(0,12);
     const units=[...new Set([...record.units,...matching.map(topic=>topic.unit).filter(Boolean)])];
@@ -201,13 +207,13 @@ export function buildPlan(materials) {
     })
       .filter(match=>match.score>0)
       .sort((a,b)=>b.score-a.score)[0]?.candidate;
-    const source=record.sources[0];
+    const source=record.historicalSource??record.sources[0];
     const reason=record.papers.size
       ? 'Found in '+record.papers.size+' of '+paperCount+' uploaded past papers'
       : record.syllabus?'Identified in the supplied syllabus':'Identified in the supplied study material';
     const question={id:i+1,topic:record.topic,unit:record.unit||units[0]||0,prompt:record.prompt,minutes,priorityScore,scoreComponents,topicIds,
       units,sections:[...record.sections],marksByGroup:record.marksByGroup,paperIds:[...record.papers],historicalFrequency:record.papers.size,historicalPaperCount:paperCount,examYears:[...record.years].sort(),
-      marks:record.marks,reason,source,sources:record.sources,answerSource:note?{file:note.file,page:note.page,number:note.number,excerpt:note.excerpt,documentIndex:note.documentIndex,method:note.method}:null,
+      marks:record.historical?record.historicalMarks:record.marks,historical:record.historical,reason,source,sources:record.sources,answerSource:note?{file:note.file,page:note.page,number:note.number,excerpt:note.excerpt,documentIndex:note.documentIndex,method:note.method}:null,
       answer:note?'Related notes excerpt · '+note.file+' · page '+note.page+'\n'+note.excerpt:'The supplied text identifies this question but provides no matching answer passage.'};
     const requiredConcepts=[...new Set(units.flatMap(unit=>prerequisites.get(unit)??[]))].slice(0,4);
     return {...question,learning:describeLearning({...question,prerequisites:requiredConcepts},[...topics.values()])};

@@ -99,7 +99,7 @@ export function exportBlocks(pack: StudyPack, section: Section): ExportBlock[] {
   if (section === 'all' || section === 'notes') {
     add(1, 'Must Read Now');
     if(pack.generatedNotes){
-      add(3,'AI-generated · Not source-verified');
+      add(3,pack.generatedNotes.references.length?'AI-generated':'AI-generated · Not source-verified');
       for(const paragraph of pack.generatedNotes.text.split(/\n+/))if(paragraph.trim())add(3,paragraph);
       for(const reference of pack.generatedNotes.references)add(3,'Source: '+reference);
     }

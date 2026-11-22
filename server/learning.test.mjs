@@ -76,3 +76,11 @@ it('selects more evidence under the same budget when the student is mostly revis
   expect(revising.requirements[0].satisfied).toBe(true);
   expect(revising.estimatedPreparationMinutes).toBeLessThanOrEqual(45);
 });
+
+it('uses domain-specific checkpoints for deadlock theory and Round Robin calculations',()=>{
+  const deadlock=describeLearning({prompt:'Explain the four necessary conditions for deadlock.',marks:5,topicIds:[]});
+  expect(deadlock.checkpoints.map(step=>step.text).join(' ')).toContain('mutual exclusion, hold and wait, no preemption, and circular wait');
+  const robin=describeLearning({prompt:'Calculate average waiting time using Round Robin.',marks:10,topicIds:[]});
+  expect(robin.checkpoints.map(step=>step.text).join(' ')).toContain('Gantt chart');
+  expect(robin.checkpoints.map(step=>step.text).join(' ')).toContain('time quantum');
+});

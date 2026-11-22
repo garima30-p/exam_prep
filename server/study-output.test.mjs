@@ -28,7 +28,7 @@ it('joins wrapped solved questions and cites the answer without counting it as p
 });
 
 const supportingQuote='Mutual exclusion protects the shared resource.';
-const structured=(id='N1',quote=supportingQuote)=>({response:{insufficientEvidence:false,sections:[{text:supportingQuote,citations:[{id,quote}]}]}});
+const structured=(id='N1',quote=supportingQuote)=>({response:{insufficientEvidence:false,sections:[{text:quote,citations:[{id,quote}]}]}});
 
 function setup(){
   const run=vi.fn().mockResolvedValue(structured());
@@ -280,7 +280,7 @@ it('automatically uses public syllabus concepts for short summaries without leak
     expect(response.status).toBe(200);
     expect(JSON.parse(search.mock.calls[0][1].body).query).toBe('operating systems deadlock prevention page replacement study guide');
     expect(await response.json()).toMatchObject({sources:[{id:'W1',url:'https://example.edu/os'}],webSearch:{providerStatus:200}});
-    expect(run.mock.calls[0][1].max_completion_tokens).toBe(390);
+    expect(run.mock.calls[0][1].max_completion_tokens).toBe(560);
   }finally{vi.unstubAllGlobals();}
 });
 
@@ -295,4 +295,33 @@ it('generates explicitly unverified notes when search is unavailable and asks on
   expect(clarification.status).toBe(422);
   expect(await clarification.json()).toMatchObject({code:'subject_required'});
   expect(run).toHaveBeenCalledTimes(1);
+});
+
+it('rejects an authentic quote about the wrong subject in a grounded exam answer',async()=>{
+ const {env,run}=setup();
+ run.mockResolvedValue({response:{insufficientEvidence:false,sections:[{text:'Scheduling selects the next ready process.',citations:[{id:'N1',quote:supportingQuote}]}]}});
+ const response=await handle(post('coach',{mode:'auto',task:'answer',request:'Explain mutual exclusion and process scheduling.',
+   subject:'Operating Systems',sources:[{file:'Notes.pdf',excerpt:supportingQuote}]}),env);
+ expect(response.status).toBe(502);
+ expect(await response.json()).toMatchObject({code:'citation_validation_failed'});
+});
+
+it('does not invent a worked result for an unseen numerical table',async()=>{
+ const {env,run}=setup();
+ const response=await handle(post('coach',{mode:'auto',task:'answer',request:'Calculate average waiting time using Round Robin for the following table.',
+   subject:'Operating Systems'}),env);
+ expect(response.status).toBe(200);
+ expect(await response.json()).toMatchObject({generated:false,sources:[],explanation:expect.stringContaining('original page')});
+ expect(run).not.toHaveBeenCalled();
+});
+
+it('generates practice wording only for known seeds, dropping unsupported historical details',async()=>{
+ const {env,run}=setup();
+ run.mockResolvedValueOnce({response:{questions:[{id:8,question:'Explain how deadlock prevention breaks a necessary condition.'},
+   {id:9,question:'Explain deadlock as asked in the 2024 paper.'},{id:99,question:'Explain how deadlock can occur in an operating system.'}]}});
+ const response=await handle(post('coach',{task:'practice',priorities:[
+   {id:8,topic:'Deadlock prevention',prompt:'Explain deadlock prevention.'},
+   {id:9,topic:'Deadlock',prompt:'Define deadlock.'},
+ ]}),env);
+ expect(await response.json()).toEqual({questions:[{id:8,prompt:'Explain how deadlock prevention breaks a necessary condition.'}]});
 });

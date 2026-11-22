@@ -16,6 +16,8 @@ import { DownloadStudyPack } from './study-output';
 import { revise, revisionFromAnswer } from './revision';
 import type { Revision } from './revision';
 import { inspectStudyInput } from './study-input';
+import { prepareScope } from './preparation-scope';
+import type { PreparationScope } from './preparation-scope';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
@@ -52,6 +54,7 @@ function CoachAnswer({text}:{text:string}) {
     return part.trim().split(/\n\s*\n/).filter(Boolean).map((block,blockIndex)=>{
       const key=index+'-'+blockIndex;
       const lines=block.split('\n');
+      if(/^#{1,4}\s+/.test(lines[0]))return <div key={key}><h3>{coachInline(lines[0].replace(/^#{1,4}\s+/,''))}</h3>{lines.length>1&&<p>{coachInline(lines.slice(1).join('\n'))}</p>}</div>;
       if(lines.every(line=>/^\s*[-*]\s+/.test(line)))return <ul key={key}>{lines.map((line,i)=>
         <li key={i}>{coachInline(line.replace(/^\s*[-*]\s+/,''))}</li>)}</ul>;
       if(lines.every(line=>/^\s*\d+[.)]\s+/.test(line)))return <ol key={key}>{lines.map((line,i)=>
@@ -91,7 +94,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [dragging,setDragging]=useState(false);
   const [result,setResult]=useState<readonly Question[]|null>(null);
   const [warnings,setWarnings]=useState<string[]>([]);
-  const [optimization,setOptimization]=useState<{data:NonNullable<Analysis['optimization']>;context:Context}|null>(null);
+  const [optimization,setOptimization]=useState<{data:NonNullable<Analysis['optimization']>}|null>(null);
+  const [preparedScope,setPreparedScope]=useState<PreparationScope|null>(null);
+  const [practice,setPractice]=useState<Record<number,string>>({});
+  const [practicePending,setPracticePending]=useState(false);
+  const practiceRun=useRef<AbortController|null>(null);
+  const analyzed=useRef<{key:string;analysis:Analysis}|null>(null);
+  const [questionAnswers,setQuestionAnswers]=useState<Record<string,{text?:string;references?:CoachSource[];generated?:boolean;pending?:boolean;error?:boolean}>>({});
+  const pendingAnswers=useRef(new Set<string>());
   const [progress,setProgress]=useState<Progress>({});
   const [elapsed,setElapsed]=useState(0);
   const timeAnchor=useRef(Date.now());
@@ -136,21 +146,22 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const restartBudget=()=>{timeAnchor.current=Date.now();setElapsed(0);};
   const update=<K extends keyof Context,>(key:K,value:Context[K])=>{
     if(key==='minutes')restartBudget();
+    if(!sampleMode){practiceRun.current?.abort();setPracticePending(false);}
     setContext(current=>({...current,[key]:value}));
-    if(key!=='minutes' && key!=='familiarity')setPlanGenerated(false);
+    if(!sampleMode||key!=='minutes'&&key!=='familiarity')setPlanGenerated(false);
   };
   async function generate(event?:FormEvent, adjusted=context,mode:'normal'|'retry'|'continue'='normal') {
     event?.preventDefault();
     if(controller.current) return;
     if(!prompt.trim() && !files.length) {setNotice('Describe your exam or attach a file to begin.');return;}
-    if(!adjusted.minutes&&/\b(?:timed plan|(?:make|build|create|give me) (?:a |my )?(?:study|revision|preparation) plan)\b/i.test(prompt.split(/summari[sz]e (?:my |these |the )?notes:/i)[0])){setNeedsTime(true);return;}
+    if(!adjusted.minutes&&(!sampleMode&&!revise(prompt,[],[],adjusted.subject)&&Boolean(prompt.trim())||/\b(?:timed plan|(?:make|build|create|give me) (?:a |my )?(?:study|revision|preparation) plan)\b/i.test(prompt.split(/summari[sz]e (?:my |these |the )?notes:/i)[0]))){setNeedsTime(true);return;}
     setNeedsTime(false);setNeedsSubject(false);setNotice('');setBusy(true);
     const run=new AbortController();
     controller.current=run;
     setProcessingMessage(activeApi.prepare&&files.length?'Opening attachments…':'Building your plan…');
     try {
       let records=documents.filter(document=>files.some(file=>file.id===document.id));
-      if(activeApi.prepare&&files.length&&mode!=='continue'){
+      if(activeApi.prepare&&files.length&&(mode==='retry'||files.some(file=>!records.some(document=>document.id===file.id)))){
         records=await activeApi.prepare(files,{records,signal:run.signal,retry:mode==='retry',
           onUpdate:({documents:updated,message})=>{setDocuments(updated);setProcessingMessage(message);}});
         setDocuments(records);
@@ -173,21 +184,26 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       if(!sampleMode&&classified.length&&!prompt.trim()&&!adjusted.minutes){
         setNeedsTime(true);return;
       }
+      const analysisKey=JSON.stringify([prompt,classified.map(file=>[file.id,file.kind]),records]);
+      const cached=!sampleMode&&analyzed.current?.key===analysisKey?analyzed.current.analysis:null;
+      const runProgress=cached?progress:{};
       let analysis:Analysis;
       try {
-        analysis=await activeApi.analyze(adjusted, classified, prompt,{documents:records,signal:run.signal,
+        analysis=cached??await activeApi.analyze(adjusted, classified, prompt,{documents:records,signal:run.signal,
           onPlanning:()=>setProcessingMessage('Matching equivalent questions and building your plan…')});
       } catch(error) {
         run.signal.throwIfAborted();
         if(!extracted)throw error;
         analysis={questions:[],warnings:['Question ranking is temporarily unavailable.']};
       }
-      const summary=extracted??revisionFromAnswer(analysis.questions.find(question=>question.answerSource))
+      if(!sampleMode&&!cached)analyzed.current={key:analysisKey,analysis};
+      const scope=prepareScope(analysis,adjusted,runProgress);
+      const summary=extracted??revisionFromAnswer(scope.questions.find(question=>question.answerSource))
         ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
-      const prioritized=analysis.optimization?.plan.selectedQuestionIds.map(id=>
-        analysis.optimization?.candidates.find(question=>question.id===id)?.topic).filter((topic):topic is string=>Boolean(topic))??[];
-      const topics=[...new Set([...prioritized,...inspected.topics,...analysis.questions.map(question=>question.topic)])]
-        .slice(0,adjusted.minutes>0&&adjusted.minutes<=15?5:10);
+      const topics=[...new Set(scope.questions.length?scope.questions.map(question=>question.topic):
+        summary?[summary.title]:inspected.topics)].slice(0,adjusted.minutes<=15?3:6);
+      const sources=[...new Map([...scope.questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),
+        ...(summary?.passages??[])].map(source=>[source.excerpt,source])).values()].slice(0,8);
       if(!sampleMode&&!summary&&!adjusted.subject&&!topics.length){setNeedsSubject(true);return;}
       setAiNote('');
       setAiReferences([]);
@@ -197,8 +213,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         try {
           const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(50000)]),
             body:JSON.stringify({task:'notes',mode:'auto',subject:adjusted.subject,topics,minutes:adjusted.minutes,
-              topic:summary?.title??adjusted.subject,request:'Write a concise revision summary for '+(summary?.title||adjusted.subject||'the supplied study topics')+'.',
-              sources:summary?.passages??[]})});
+              topic:scope.questions.length?topics[0]:summary?.title??adjusted.subject,request:'Write a concise revision summary for '+(adjusted.subject||summary?.title||'the supplied study topics')+'.',
+              priorities:scope.questions.map(question=>({topic:question.topic,prompt:question.prompt})),sources})});
           const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
           if(!response.ok||!data.explanation?.trim()){
             if(data.code==='subject_required')setNeedsSubject(true);
@@ -213,34 +229,34 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           setNotice('AI generation failed. Please retry.');return;
         }
       }
+      practiceRun.current?.abort();setPracticePending(false);setPractice({});
       setRevision(summary);setEditing(false);setShowQuestions(false);
       run.signal.throwIfAborted();
       setResult(analysis.questions);setWarnings(analysis.warnings);
-      setOptimization(analysis.optimization?{data:analysis.optimization,context:adjusted}:null);
-      setProgress({});restartBudget();setLimit(10);setPlanGenerated(true); }
+      setOptimization(analysis.optimization?{data:analysis.optimization}:null);
+      setPreparedScope(scope);setProgress(runProgress);restartBudget();setLimit(10);setPlanGenerated(true); }
     catch(error) { setNotice(run.signal.aborted?'Processing cancelled. Run again to resume from usable pages.':error instanceof Error?error.message:'The study plan could not load. Try again.'); }
     finally {controller.current=null;setProcessingMessage('');setBusy(false);}
   }
   const remainingTime=Math.max(0,context.minutes-elapsed);
   const plan=useMemo(()=>{
     if(!optimization)return null;
-    const {data,context:original}=optimization;
-    if(data.plan.totalAvailableMinutes===remainingTime&&original.pattern===context.pattern&&
-      original.familiarity===context.familiarity&&!Object.keys(progress).length)return data.plan;
-    return makeLearningPlan(data.candidates,data.topics,remainingTime,context.pattern,context.familiarity,progress);
-  },[optimization,remainingTime,context.pattern,context.familiarity,progress]);
+    const {data}=optimization;
+    const candidates=!sampleMode&&preparedScope?data.candidates.filter(question=>preparedScope.questions.some(item=>item.id===question.id)):data.candidates;
+    return makeLearningPlan(candidates,data.topics,remainingTime,context.pattern,context.familiarity,progress);
+  },[optimization,preparedScope,sampleMode,remainingTime,context.pattern,context.familiarity,progress]);
   const fitted=plan&&optimization
     ? plan.selectedQuestionIds.map(id=>optimization.data.candidates.find(question=>question.id===id)!)
     : fitQuestions(result ?? [],context.minutes);
   const visible=(remainingTime||context.minutes?fitted:result??[]).slice(0,limit);
-  const questionList=visible.length?visible:(result??[]).slice(0,limit);
-  const questionsOutsideBudget=Boolean(context.minutes&&!visible.length&&questionList.length);
+  const questionList=!sampleMode?(preparedScope?.questions??[]).map(question=>practice[question.id]?{...question,prompt:practice[question.id]}:question):visible.length?visible:(result??[]).slice(0,limit);
+  const questionsOutsideBudget=Boolean(!sampleMode&&!preparedScope?.review&&!visible.length&&questionList.length);
   const plannedIds=new Set(fitted.map(question=>question.id));
   const tracked=optimization?.data.candidates.filter(question=>!plannedIds.has(question.id)&&progress[question.id])??[];
   const coveredUnits=[...new Set(visible.map(question=>question.unit).filter(Boolean))].sort((a,b)=>a-b);
   const missingUnits=[...new Set(result?.map(question=>question.unit).filter(unit=>unit&&!coveredUnits.includes(unit)))].sort((a,b)=>a-b);
   const coverageMessage = missingUnits.length ? 'Units outside the current shortlist: '+missingUnits.join(', ')+'.' : '';
-  const pack = buildStudyPack(context,remainingTime,plan,fitted,visible,optimization?.data.candidates??result??[],
+  const pack = buildStudyPack(context,remainingTime,plan,fitted,sampleMode?visible:questionList,sampleMode?optimization?.data.candidates??result??[]:questionList,
     sampleMode,[...warnings,...(plan?.warnings??[]),coverageMessage].filter(Boolean));
   const readMinutes=revision&&remainingTime?Math.min(remainingTime,Math.max(1,Math.ceil(revision.passages.length/2))):0;
   if(aiNote&&!sampleMode)pack.generatedNotes={text:aiNote,references:aiReferences.map(source=>source.kind==='uploaded'?sourceLabel(source):source.title+' · '+source.url)};
@@ -248,9 +264,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(sampleMode)pack.revision=revision;
     if(readMinutes&&!pack.timeline.length)pack.timeline.push({title:revision.title+' · Read and recall',minutes:readMinutes});
   }
+  const reviewAllocations:Record<number,number>={};
+  if(!sampleMode&&preparedScope?.review){
+    let available=Math.min(remainingTime,Math.floor(remainingTime*.9));
+    pack.timeline=preparedScope.questions.flatMap(question=>{const minutes=Math.min(available,preparedScope.allocations[question.id]??0);available-=minutes;reviewAllocations[question.id]=minutes;return minutes?[{title:question.topic+' (quick review)',minutes}]:[];});
+    if(pack.timeline.length)pack.timeline.push({title:'Active recall',minutes:Math.ceil(remainingTime*.1)});
+    pack.questions=pack.questions.map(entry=>({...entry,minutes:reviewAllocations[entry.question.id]??0}));
+  }
   const nextAction=pack.timeline[0];
   const activeCoachRequest=useRef<AbortController|null>(null);
-  useEffect(()=>()=>activeCoachRequest.current?.abort(),[]);
+  useEffect(()=>()=>{activeCoachRequest.current?.abort();practiceRun.current?.abort();},[]);
   async function askCoach(message:Message,request:CoachRequest) {
     if(activeCoachRequest.current)return;
     const operation=new AbortController();
@@ -331,8 +354,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     void askCoach(pending,message.retry);
   }
   function open(next:Page|null, reference:Source|null=null){setPage(next);setSource(reference);dialog.current?.showModal();}
-  function reset(){activeCoachRequest.current?.abort();activeCoachRequest.current=null;setCoachPending(false);setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNeedsSubject(false);setNotice('');setTimeReply('');setSubjectReply('');setPlanGenerated(false);}
-  function toggleExample(){setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);setExampleMode(!exampleMode);editPrompt(exampleMode?'':sample);}
+  function reset(){practiceRun.current?.abort();analyzed.current=null;setPreparedScope(null);setQuestionAnswers({});activeCoachRequest.current?.abort();activeCoachRequest.current=null;setCoachPending(false);setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNeedsSubject(false);setNotice('');setTimeReply('');setSubjectReply('');setPlanGenerated(false);}
+  function toggleExample(){setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);analyzed.current=null;setPreparedScope(null);setExampleMode(!exampleMode);editPrompt(exampleMode?'':sample);}
   function modifyFile(id:number,kind?:string) {
     setFiles(current=>kind?current.map(file=>file.id===id?{...file,kind,kindOverride:true}:file):current.filter(file=>file.id!==id));
     if(!kind)setDocuments(current=>current.filter(document=>document.id!==id));
@@ -349,19 +372,71 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setProgress(current=>({...current,[questionId]:{...current[questionId],[id]:status}}));
     setElapsed(Math.max(0,Math.floor((Date.now()-timeAnchor.current)/60000)));
   }
+  async function revealQuestions(){
+    setShowQuestions(true);
+    if(sampleMode)return;
+    const candidates=(preparedScope?.questions??[]).filter(question=>!question.historical&&
+      !question.historicalFrequency&&!(question.sources??[question.source]).some(source=>files.some(file=>file.id===source.documentIndex&&file.kind==='Past paper')));
+    if(!candidates.length)return;
+    const operation=new AbortController();
+    practiceRun.current=operation;
+    setPracticePending(true);
+    try{
+      const r=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
+        signal:AbortSignal.any([operation.signal,AbortSignal.timeout(20000)]),
+        body:JSON.stringify({task:'practice',priorities:candidates.map(({id,topic,prompt})=>({id,topic,prompt}))})});
+      const data=await r.json() as {questions?:{id:number;prompt:string}[]};
+      if(r.ok&&Array.isArray(data.questions)&&!operation.signal.aborted){
+        const allowed=new Set(candidates.map(question=>question.id));
+        const key=(value:string)=>value.trim().toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+        const used=new Set((preparedScope?.questions??[]).filter(question=>!allowed.has(question.id)).map(question=>key(question.prompt)));
+        setPractice(Object.fromEntries(data.questions.flatMap(question=>{
+          if(!allowed.has(question.id)||typeof question.prompt!=='string'||used.has(key(question.prompt)))return [];
+          used.add(key(question.prompt));return [[question.id,question.prompt]];
+        })));
+      }
+    }catch{/* Keep syllabus practice questions available if generation fails. */}
+    finally{if(practiceRun.current===operation){practiceRun.current=null;setPracticePending(false);}}
+  }
+  async function loadQuestionAnswer(question:Question,key:string){
+    if(pendingAnswers.current.has(key)||questionAnswers[key]?.text)return;
+    pendingAnswers.current.add(key);
+    setQuestionAnswers(current=>({...current,[key]:{pending:true}}));
+    try{
+      const sources=question.answerSource?[question.answerSource]:aiReferences.filter(reference=>reference.kind==='uploaded').slice(0,3);
+      const r=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(50000),
+        body:JSON.stringify({task:'answer',mode:'auto',request:question.prompt,topic:question.topic,subject:context.subject,
+          sources,minutes:remainingTime})});
+      const response=await r.json() as {explanation?:string;sources?:CoachSource[];generated?:boolean};
+      if(!r.ok||!response.explanation?.trim())throw new Error();
+      setQuestionAnswers(current=>({...current,[key]:{text:response.explanation,references:response.sources,generated:response.generated!==false}}));
+    }catch{setQuestionAnswers(current=>({...current,[key]:{error:true}}));}
+    finally{pendingAnswers.current.delete(key);}
+  }
   function renderQuestion(q:Question,index?:number){
     const effort=plan?.efforts[q.id];
+    const shortReview=!sampleMode&&preparedScope?.review&&Boolean(preparedScope.allocations[q.id]);
+    const allocation=shortReview?reviewAllocations[q.id]:(sampleMode||plannedIds.has(q.id)?effort?.minutes??q.minutes:0);
+    const answerKey=JSON.stringify([context.subject,q.prompt,q.answerSource??null,q.sources??[q.source]]);
+    const answer=questionAnswers[answerKey];
     return <article className="question" key={q.id}>
-      <div className="question-meta">{index!==undefined&&<span className="rank">#{index+1}</span>}<span>{q.topic}{q.unit?' · Unit '+q.unit:''}</span><span className="spacer"/><span>{effort?.minutes??q.minutes} min{q.marks?' · '+q.marks+' marks':''}</span></div>
-      <h3>{q.prompt}</h3><p>{q.reason}.</p>
-      {!sampleMode&&q.answerSource&&<details className="checkpoints"><summary>Source-backed answer</summary>
-        {answerLines(q,false,remainingTime).map((text,index)=><p key={index}>{text}</p>)}
-        <button className="link accent" onClick={()=>open(null,q.answerSource!)}>{sourceLabel(q.answerSource)}</button>
+      <div className="question-meta">{index!==undefined&&<span className="rank">#{index+1}</span>}<span>{q.topic}{q.unit?' · Unit '+q.unit:''}</span><span className="spacer"/><span>{allocation?allocation+' min'+(shortReview?' quick review':''):'Reference'}{q.marks?' · '+q.marks+' marks':''}</span></div>
+      <h3>{q.prompt}</h3><p>{q.historical?'Previous-Year Question'+(q.examYears?.length?' · '+q.examYears.join(', '):'')+' · ':q.sources?.some(source=>documents.some(doc=>doc.id===source.documentIndex&&files.some(file=>file.id===doc.id&&file.kind==='Past paper')))?'Uploaded past-paper question · ':practice[q.id]?'AI-Generated Practice Question · ':'Practice question · '}{q.reason}.</p>
+      {!sampleMode&&<details className="checkpoints" onToggle={event=>{if(event.currentTarget.open&&!answer)void loadQuestionAnswer(q,answerKey);}}>
+        <summary>View Answer ↓</summary>
+        {answer?.pending&&<p role="status">Preparing answer…</p>}
+        {answer?.error&&<><p>Couldn’t verify an answer right now. {q.answerSource?'You can still read the matching passage.':''}</p>
+          <button className="link accent" onClick={()=>void loadQuestionAnswer(q,answerKey)}>Retry</button>
+          {q.answerSource&&<button className="link accent" onClick={()=>open(null,q.answerSource!)}>{sourceLabel(q.answerSource)}</button>}</>}
+        {answer?.text&&<>{answer.generated&&<small>{answer.references?.length?'AI-generated':'AI-generated · Not source-verified'}</small>}<CoachAnswer text={answer.text}/>
+          {answer.references?.map(reference=>reference.kind==='uploaded'
+            ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
+            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</>}
       </details>}
-      {!sampleMode&&!q.answerSource&&<p>No supporting answer passage is available.</p>}
       {(q.sources??[q.source]).map((reference,i)=><button key={i} className="link accent source" onClick={()=>open(null,reference)}><Icon name="file"/>{sourceLabel(reference)}</button>)}
       {effort&&q.learning&&<details className="checkpoints">
         <summary>{q.learning.type} · {preparationLabels[effort.status]} · {effort.completed}/{effort.total} checkpoints</summary>
+        {shortReview&&<p>Use this allocation to review the method. A full answer takes longer.</p>}
         <p>Remaining estimate: {effort.remaining.understanding} min understanding, {effort.remaining.practice} min practice, {effort.remaining.recall} min recall.</p>
         {q.learning.prerequisites.length>0&&<p>Syllabus prerequisites: {q.learning.prerequisites.join(', ')}.</p>}
         <ol>
@@ -425,7 +500,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(undefined,context,'retry')}>Retry unread files</button>}
       </section>
       {result && planGenerated && !editing && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Revision summary{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse summary">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
+        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse summary">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
         <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
         {aiNote?<article className="study-note" aria-label="Revision notes">
           <strong>{aiReferences.length?'AI-generated':'AI-generated · Not source-verified'}</strong>
@@ -440,8 +515,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </article>}
         {documents.some(document=>!documentComplete(document))&&<p className="notice">Unreadable or unverified pages were excluded from the summary.</p>}
         {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
-        <button className="secondary" onClick={()=>setShowQuestions(true)} disabled={showQuestions}>Generate Questions</button>
+        <button className="secondary" onClick={()=>void revealQuestions()} disabled={showQuestions}>{practicePending?'Preparing practice questions…':'Generate Questions'}</button>
         <details className="study-output" open={showQuestions||undefined}><summary>More study tools</summary>
+        {pack.timeline.length>0&&<details><summary>Time breakdown</summary><ol className="study-timeline">
+          {pack.timeline.map((item,index)=><li key={index}>{item.title} <strong>{item.minutes} min</strong></li>)}
+        </ol></details>}
         <div className="result-grid"><section aria-labelledby="important-questions">
           {showQuestions&&(questionList.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
 
@@ -453,7 +531,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             <button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button>
           </article>}
           {showQuestions&&!questionList.length&&!revision&&<p>No supported questions were found.</p>}
-          {showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>setLimit(current=>current+10)}>Show next 10</button>}
+          {sampleMode&&showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>setLimit(current=>current+10)}>Show next 10</button>}
           {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
         </section></div>
           {result.length>0&&pack.warnings.length>0&&<div className="coverage"><h3>Sources and Coverage</h3>

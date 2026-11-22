@@ -31,14 +31,20 @@ export function describeLearning(question,topics=[]) {
   const type=questionType(question.prompt);
   const profile=profiles[type];
   const linked=topics.filter(topic=>question.topicIds.includes(topic.id)&&topic.id.startsWith('syllabus:')).slice(0,3);
-  const checkpoints=profile.steps.map((text,index)=>({
+  const steps=/\bround[ -]robin\b/i.test(question.prompt)&&type==='numerical'
+    ?['Read the arrival times, burst times, and time quantum.','Build the Gantt chart and record each completion time.','Subtract arrival time from completion time, then subtract burst time to find waiting time.','Recalculate the average and verify every process ran for its full burst.']
+    :/\bdeadlocks?\b/i.test(question.prompt)&&/\b(?:conditions|coffman)\b/i.test(question.prompt)
+    ?['Define deadlock in terms of processes waiting for resources.','Name mutual exclusion, hold and wait, no preemption, and circular wait.','Explain why breaking any one condition prevents deadlock.','Reproduce the four conditions without notes.']
+    :profile.steps;
+  const specialized=steps!==profile.steps;
+  const checkpoints=steps.map((text,index)=>({
     id:String(index+1),text,label:'Type guide',
-    phase:index===0?'understanding':index===profile.steps.length-1?'recall':'practice'
+    phase:index===0?'understanding':index===steps.length-1?'recall':'practice'
   }));
-  if(linked.length){
+  if(!specialized&&linked.length){
     checkpoints[0]={...checkpoints[0],text:'Using the syllabus, explain how '+linked.map(topic=>topic.title).join(', ')+' relates to the question.',
       label:'Syllabus-linked'};
-  } else {
+  } else if(!specialized) {
     const target=question.prompt.match(/^(?:define|explain|describe|compare|contrast|derive|draw|sketch)\s+([^\n?!]{5,100})[.?!]?$/i)?.[1]?.replace(/\.$/,'');
     if(target){
       const action=type==='comparison'?'Identify what the question asks you to compare'
@@ -48,7 +54,7 @@ export function describeLearning(question,topics=[]) {
       checkpoints[0]={...checkpoints[0],text:action+': “'+target+'”.',label:'Question wording'};
     }
   }
-  if(question.answerSource){
+  if(question.answerSource&&checkpoints.length<5){
     checkpoints.splice(1,0,{id:'source',text:'Use the cited notes excerpt to identify a relevant idea. Explain its connection to this question from memory.',
       phase:'understanding',label:'Notes-linked',source:question.answerSource});
   }

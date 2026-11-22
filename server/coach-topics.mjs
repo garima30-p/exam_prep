@@ -64,3 +64,5 @@ export function summarySearchTopic(subject,topics){
  const department=canonical||catalog.find(entry=>entry.concept===concepts[0])?.subject;
  return department?[department,...concepts,'study guide'].join(' ').slice(0,100):'';
 }
+
+export const publicStudyConcepts=text=>catalog.filter(({concept})=>contains(text,concept)).map(item=>item.concept);

@@ -50,11 +50,12 @@ const unique=items=>[...new Set(items)];
 function combine(members,topics) {
   if(members.length===1)return members[0];
   const first=members[0];
+  const representative=members.find(question=>question.historical)??first;
   const sources=[...new Map(members.flatMap(question=>question.sources??[question.source]).map(source=>[source.id??JSON.stringify(source),source])).values()];
   const paperIds=unique(members.flatMap(question=>question.paperIds??[]));
   const known=unique(members.flatMap(question=>question.topicIds).filter(id=>id.startsWith('syllabus:')));
   const topicIds=known.length?known:first.topicIds;
-  const marks=Math.max(...members.map(question=>question.marks));
+  const marks=representative.historical?representative.marks:Math.max(...members.map(question=>question.marks));
   const marksByGroup={};
   for(const question of members)for(const [key,value] of Object.entries(question.marksByGroup??{}))
     marksByGroup[key]=Math.max(marksByGroup[key]??0,value);
@@ -68,7 +69,7 @@ function combine(members,topics) {
   const scoreComponents={recurrence,marks:strongest('marks'),syllabus:strongest('syllabus'),
     breadth:known.length?Math.min(known.length,4)/4:null,recency:strongest('recency'),preparationTime:(30-minutes)/15};
   const withNotes=members.find(question=>question.answerSource)??first;
-  const merged={...first,sources,paperIds,topicIds,marks,minutes,marksByGroup,scoreComponents,priorityScore:scorePriority(scoreComponents),
+  const merged={...representative,id:first.id,sources,paperIds,topicIds,marks,minutes,marksByGroup,scoreComponents,priorityScore:scorePriority(scoreComponents),
     historicalFrequency:paperIds.length,sections:unique(members.flatMap(q=>q.sections??[])),units:unique(members.flatMap(q=>q.units??[])),
     examYears:unique(members.flatMap(q=>q.examYears??[])).sort((a,b)=>a-b),
     variants:members.map(q=>({id:q.id,prompt:q.prompt,sources:q.sources??[q.source]})),

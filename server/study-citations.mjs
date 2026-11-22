@@ -1,6 +1,10 @@
 const whitespace = text => text.trim().replace(/\s+/g, ' ');
 
-export function checkStudyAnswer(raw, registry, strict) {
+const insignificant=new Set('from that this these those have with will also when into which what should recall question explain answer about more some each must their there other they does such example section could would definition'.split(' '));
+const keywords=text=>new Set((text.toLowerCase().match(/[a-z]{4,}/g)??[]).map(word=>word.replace(/(?:ing|ed|s)$/,'')).filter(word=>word.length>=3&&!insignificant.has(word)));
+const quantities=text=>text.match(/\b\d+(?:\.\d+)?\s*(?:ms|seconds?|minutes?|kb|mb|gb|%)(?![a-z])/gi)??[];
+
+export function checkStudyAnswer(raw, registry, strict, verifyRelevance=false) {
   const text = raw.trim().replace(/^\x60\x60\x60(?:json)?\s*([\s\S]*?)\s*\x60\x60\x60$/i, '$1');
   let answer;
   try { answer = JSON.parse(text); }
@@ -31,6 +35,15 @@ export function checkStudyAnswer(raw, registry, strict) {
       if (quote.length < 20 || !whitespace(source.excerpt).includes(quote)) {
         issue ??= 'unsupported_quote';
         continue;
+      }
+      if(verifyRelevance){
+        const claim=keywords(section.text);
+        const support=keywords(quote);
+        const shared=[...claim].filter(word=>support.has(word)).length;
+        if(shared<Math.min(2,claim.size)||quantities(section.text).some(value=>!whitespace(source.excerpt).toLowerCase().includes(value.toLowerCase()))){
+          issue ??= 'unrelated_evidence';
+          continue;
+        }
       }
       references.set(id, source);
     }
