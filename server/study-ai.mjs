@@ -4,15 +4,13 @@ export const MODEL='@cf/google/gemma-4-26b-a4b-it';
 export function aiStatus(env){
  if(env?.STUDY_AI_ENABLED!=='true')return 'ai_disabled';
  if(typeof env.AI?.run!=='function')return 'ai_binding_missing';
- if(!env.STUDY_BUDGET)return 'ai_budget_missing';
  return 'ready';
 }
 export const coachEnabled=env=>aiStatus(env)==='ready';
 export const aiErrors={
  ai_disabled:'AI generation is disabled.',
  ai_binding_missing:'The Workers AI binding is missing.',
- ai_budget_missing:'The AI usage budget is not configured.',
- usage_limit:'The AI usage allowance has been reached. Try again later.',
+ usage_limit:'Cloudflare Workers AI has reached a usage limit. Try again later.',
  model_unavailable:'Gemma is temporarily unavailable.',
  invalid_response:'Gemma returned an invalid response.',
  request_failed:'The AI request failed or timed out.',
@@ -37,57 +35,39 @@ const searchCache=new Map();
 export class StudyBudget {
  constructor(state){this.state=state;}
  async fetch(request){
-  const {guest,kind:operation,lease}=await request.json();
-  const kind=operation==='repair'?'ai':operation;
-  if(!['ai','search','release'].includes(kind)||!/^([a-f0-9]{64})$/.test(guest))return json({},400);
-  if(kind==='release'&&typeof lease!=='string')return json({},400);
+  const {guest,kind}=await request.json();
+  if(kind!=='search'||!/^([a-f0-9]{64})$/.test(guest))return json({},400);
   const day=new Date().toISOString().slice(0,10);
   const allowed=await this.state.storage.transaction(async tx=>{
    const previous=await tx.get('usage');
-   const usage=previous?.day===day?previous:{day,ai:0,search:0,guests:{}};
-   const active=Object.fromEntries(Object.entries(usage.active??{}).filter(([,entry])=>entry.until>Date.now()));
-   if(kind==='release'){
-    if(active[guest]?.lease===lease){delete active[guest];await tx.put('usage',{...usage,active});}
-    return true;
-   }
-   if(kind==='ai'&&(active[guest]||Object.keys(active).length>=2))return false;
-   const count=usage.guests[guest]??{ai:0,search:0,last:0};
-   const limit=kind==='ai'?20:10;
-   if(usage[kind]>=limit||count[kind]>=(kind==='ai'?5:3)||Date.now()-count.last<2000&&operation==='ai')return false;
-   usage[kind]++;count[kind]++;
-   if(kind==='ai')count.last=Date.now();
-   if(kind==='ai')active[guest]={until:Date.now()+60_000,lease};
-   usage.guests[guest]=count;
-   await tx.put('usage',{...usage,active});
+   const usage=previous?.day===day?previous:{day,search:0,guests:{}};
+   const count=usage.guests[guest]?.search??0;
+   if(usage.search>=10||count>=3)return false;
+   usage.guests[guest]={search:count+1};
+   await tx.put('usage',{day,search:usage.search+1,guests:usage.guests});
    return true;
   });
   return json({allowed});
  }
 }
 
-async function charge(env,guest,kind,lease){
+async function reserveSearch(env,guest){
  const stub=env.STUDY_BUDGET.get(env.STUDY_BUDGET.idFromName('global'));
- const response=await stub.fetch('https://budget.internal/',{method:'POST',body:JSON.stringify({guest,kind,lease})});
+ const response=await stub.fetch('https://budget.internal/',{method:'POST',body:JSON.stringify({guest,kind:'search'})});
  return response.ok&&(await response.json()).allowed===true;
 }
 
-async function runGemma(env,guest,messages,maxTokens,structured=false,repair=false){
+async function runGemma(env,messages,maxTokens,structured=false){
  const started=Date.now();
- const lease=crypto.randomUUID();
  let timeout;
- let providerStarted=false;
- let providerSettled=false;
  let result;
  try{
-  if(!await charge(env,guest,repair?'repair':'ai',lease))return {code:'usage_limit',status:429,durationMs:Date.now()-started};
   const inference=Promise.resolve().then(()=>env.AI.run(MODEL,{
    messages,max_completion_tokens:maxTokens,temperature:.2,
    chat_template_kwargs:{enable_thinking:false},
    ...(structured?{response_format:{type:'json_object'}}:{}),
   }));
-  providerStarted=true;
-  const tracked=inference.finally(()=>{providerSettled=true;});
-  const response=await Promise.race([tracked,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('timeout')),18_000);})]);
+  const response=await Promise.race([inference,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('timeout')),18_000);})]);
   const choice=response?.choices?.[0];
   const text=[choice?.message?.content,choice?.message?.parsed,response?.response]
    .map(value=>structured&&value&&typeof value==='object'?JSON.stringify(value):value)
@@ -99,12 +79,10 @@ async function runGemma(env,guest,messages,maxTokens,structured=false,repair=fal
  }catch(error){
   const providerCode=String(error?.code??'');
   const limit=error?.status===429||['429','3036'].includes(providerCode);
-  result={code:limit?'usage_limit':providerStarted&&error?.message!=='timeout'?'model_unavailable':'request_failed',
+  result={code:limit?'usage_limit':error?.message!=='timeout'?'model_unavailable':'request_failed',
    status:limit?429:502,...(/^\d{3,6}$/.test(providerCode)?{providerCode}:{})};
  }finally{
   clearTimeout(timeout);
-  // Keep timed-out calls reserved until the lease expires.
-  if(providerSettled)await charge(env,guest,'release',lease).catch(()=>{});
  }
  return {...result,durationMs:Date.now()-started};
 }
@@ -127,23 +105,23 @@ export async function diagnoseGemma(request,env){
  if(request.method!=='POST'||!await authorized(request,env?.STUDY_AI_DIAGNOSTIC_TOKEN))return json({error:'Endpoint not found.'},404);
  const bindingAvailable=typeof env.AI?.run==='function';
  const status=aiStatus(env);
- if(!bindingAvailable||!env.STUDY_BUDGET)return json({model:MODEL,bindingAvailable,ok:false,parsed:false,code:!bindingAvailable?'ai_binding_missing':'ai_budget_missing',status:503,durationMs:0},503);
- const outcome=await runGemma(env,await guestKey(request),[{role:'user',content:'Explain deadlock in operating systems in three sentences.'}],220);
+ if(!bindingAvailable)return json({model:MODEL,bindingAvailable,ok:false,parsed:false,code:'ai_binding_missing',status:503,durationMs:0},503);
+ const outcome=await runGemma(env,[{role:'user',content:'Explain deadlock in operating systems in three sentences.'}],220);
  const {text,...metadata}=outcome;
  console.info('study_ai_diagnostic',JSON.stringify({model:MODEL,bindingAvailable,configuration:status,parsed:Boolean(text),...metadata}));
  return json({model:MODEL,bindingAvailable,configuration:status,ok:Boolean(text),parsed:Boolean(text),...metadata,...(text?{explanation:text}:{})},outcome.status);
 }
 
-async function retrieveWeb(publicTopic,env,guest){
+async function retrieveWeb(publicTopic,env,request){
  let web=[], webStatus='', webCode='';
   const query=clean(publicTopic,100).replace(/[^\p{L}\p{N} .()+-]/gu,'').trim();
-  if(!env.TAVILY_API_KEY){webStatus='Web retrieval is unavailable.';webCode='web_unavailable';}
+  if(!env.TAVILY_API_KEY||!env.STUDY_BUDGET){webStatus='Web retrieval is unavailable.';webCode='web_unavailable';}
   else if(!query){webStatus='Enter a public topic to search the web.';webCode='insufficient_evidence';}
   else try{
    const key=query.toLowerCase();
    const cached=searchCache.get(key);
    if(cached&&cached.until>Date.now())web=cached.sources;
-   else if(!await charge(env,guest,'search')){webStatus='The web search allowance has been reached.';webCode='usage_limit';}
+   else if(!await reserveSearch(env,await guestKey(request))){webStatus='The web search allowance has been reached.';webCode='web_usage_limit';}
    else {
     const response=await fetch('https://api.tavily.com/search',{method:'POST',signal:AbortSignal.timeout(7500),
      headers:{Authorization:'Bearer '+env.TAVILY_API_KEY,'Content-Type':'application/json'},
@@ -181,12 +159,11 @@ export async function generateStudyReply(input,env,request){
   .filter(source=>source.score>0).sort((a,b)=>b.score-a.score).slice(0,3)
   .map(({score,...source},index)=>({...source,id:'N'+(index+1),kind:'uploaded'}));
  if(mode==='notes'&&!uploaded.length)return json({error:'Your notes do not contain enough relevant evidence.',code:'insufficient_evidence'},422);
- const guest=await guestKey(request);
  const wantsWeb=mode==='web'||mode==='mixed'&&!uploaded.length;
- let {web,webStatus,webCode}=wantsWeb?await retrieveWeb(input.publicTopic,env,guest):{web:[],webStatus:'',webCode:''};
+ let {web,webStatus,webCode}=wantsWeb?await retrieveWeb(input.publicTopic,env,request):{web:[],webStatus:'',webCode:''};
  if((mode==='web'||task==='notes'&&!uploaded.length)&&!web.length){
   const code=webCode||'insufficient_evidence';
-  return json({error:webStatus,code},code==='usage_limit'?429:code==='web_unavailable'?503:422);
+  return json({error:webStatus,code},code==='web_usage_limit'?429:code==='web_unavailable'?503:422);
  }
  const registry=new Map([...uploaded,...web].map(source=>[source.id,source]));
  const strict=mode==='notes'||mode==='web'||task==='notes';
@@ -205,22 +182,22 @@ export async function generateStudyReply(input,env,request){
   code:result.code??checked?.issue??'ok',
  }));
  const messages=buildMessages();
- let result=await runGemma(env,guest,messages,structured?620:300,structured);
+ let result=await runGemma(env,messages,structured?620:300,structured);
  let checked=result.text&&structured?checkStudyAnswer(result.text,registry,strict):null;
  log(1,result,checked);
  if(checked?.issue==='insufficient_evidence'&&mode==='mixed'&&!wantsWeb){
-  ({web,webStatus,webCode}=await retrieveWeb(input.publicTopic,env,guest));
+  ({web,webStatus,webCode}=await retrieveWeb(input.publicTopic,env,request));
   if(!web.length){
    const code=webCode||'insufficient_evidence';
-   return json({error:webStatus,code,requestId},code==='usage_limit'?429:code==='web_unavailable'?503:422);
+   return json({error:webStatus,code,requestId},code==='web_usage_limit'?429:code==='web_unavailable'?503:422);
   }
   for(const source of web)registry.set(source.id,source);
-  result=await runGemma(env,guest,buildMessages(),620,true,true);
+  result=await runGemma(env,buildMessages(),620,true);
   checked=result.text?checkStudyAnswer(result.text,registry,strict):null;
   log(2,result,checked);
  }else if(checked?.issue&&checked.issue!=='insufficient_evidence'&&checked.hasText){
-  const correction=await runGemma(env,guest,[...messages,{role:'assistant',content:result.text},
-    {role:'user',content:'Repair the JSON and citations once. Use only original evidence in this request. Use an exact quote only when it supports the paragraph. Remove unsupported claims rather than assigning replacement citations. '+contract}],620,true,true);
+  const correction=await runGemma(env,[...messages,{role:'assistant',content:result.text},
+    {role:'user',content:'Repair the JSON and citations once. Use only original evidence in this request. Use an exact quote only when it supports the paragraph. Remove unsupported claims rather than assigning replacement citations. '+contract}],620,true);
   const corrected=correction.text?checkStudyAnswer(correction.text,registry,strict):null;
   log(2,correction,corrected);
   if(correction.text){result=correction;checked=corrected;}

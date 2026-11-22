@@ -30,18 +30,18 @@ it('joins wrapped solved questions and cites the answer without counting it as p
 const supportingQuote='Mutual exclusion protects the shared resource.';
 const structured=(id='N1',quote=supportingQuote)=>({response:{insufficientEvidence:false,sections:[{text:supportingQuote,citations:[{id,quote}]}]}});
 
-function setup(responses=[true]){
+function setup(){
   const run=vi.fn().mockResolvedValue(structured());
-  const charge=vi.fn(async()=>Response.json({allowed:responses.shift()??true}));
-  const env={STUDY_AI_ENABLED:'true',AI:{run},STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:charge})}};
-  return {env,run,charge};
+  const reserveSearch=vi.fn(async()=>Response.json({allowed:true}));
+  const env={STUDY_AI_ENABLED:'true',AI:{run},STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:reserveSearch})}};
+  return {env,run};
 }
 
-it('requires opt-in and refuses exhausted global allowances before calling Gemma',async()=>{
-  const {env,run}=setup([false,true]);
+it('requires opt-in but does not require a budget binding to call Gemma',async()=>{
+  const {env,run}=setup();
+  delete env.STUDY_BUDGET;
   const body={request:'Explain mutual exclusion',mode:'notes',sources:[{file:'Notes.pdf',page:7,excerpt:'Mutual exclusion protects the shared resource.'}]};
   expect((await handle(post('coach',body))).status).toBe(503);
-  expect((await handle(post('coach',body),env)).status).toBe(429);
   expect(run).not.toHaveBeenCalled();
   const answer=await (await handle(post('coach',body),env)).json();
   expect(run).toHaveBeenCalledWith(MODEL,expect.objectContaining({
@@ -97,22 +97,21 @@ it('hides the fixed diagnostic without its secret and parses a Gemma chat comple
   expect(await response.json()).toMatchObject({model:MODEL,bindingAvailable:true,ok:true,parsed:true,explanation:'Deadlock is a cycle of waiting processes.'});
 });
 
-it('limits concurrent inference globally and releases only the matching lease',async()=>{
-  const entries=new Map();
-  const budget=new StudyBudget({storage:{transaction:async callback=>callback({
-    get:async key=>entries.get(key),put:async(key,value)=>entries.set(key,value),
-  })}});
-  const ask=async(index,kind='ai',lease='lease-'+index)=>{
-    const response=await budget.fetch(post('budget',{kind,lease,guest:index.toString(16).padStart(64,'0')}));
-    return (await response.json()).allowed;
-  };
-  expect(await ask(1)).toBe(true);
-  expect(await ask(2)).toBe(true);
-  expect(await ask(3)).toBe(false);
-  await ask(1,'release','wrong lease');
-  expect(await ask(3)).toBe(false);
-  await ask(1,'release');
-  expect(await ask(3)).toBe(true);
+it('reaches Gemma beyond the previous daily, guest and concurrency caps',async()=>{
+  const {env,run}=setup();
+  run.mockResolvedValue({response:'Deadlock is a cycle of waiting processes.'});
+  const responses=await Promise.all(Array.from({length:21},()=>
+    handle(post('coach',{request:'Explain deadlock'}),env)));
+  expect(responses.every(response=>response.status===200)).toBe(true);
+  expect(run).toHaveBeenCalledTimes(21);
+});
+
+it('still reports provider usage limits',async()=>{
+  const {env,run}=setup();
+  run.mockRejectedValueOnce(Object.assign(new Error('Provider usage limit'),{status:429}));
+  const response=await handle(post('coach',{request:'Explain deadlock'}),env);
+  expect(response.status).toBe(429);
+  expect(await response.json()).toMatchObject({code:'usage_limit',error:expect.stringContaining('Cloudflare Workers AI')});
 });
 
 it('never treats reasoning-only output as an answer and accepts a populated provider text fallback',async()=>{
