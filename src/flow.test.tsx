@@ -8,6 +8,17 @@ import { demoApi, fixture } from './api';
 import type { ExamApi, RankedQuestion } from './api';
 import { makeLearningPlan } from '../server/learning.mjs';
 
+const setDraft=(host:HTMLElement,value:string)=>{
+  const field=host.querySelector<HTMLTextAreaElement>('#prompt')!;
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(field,value);
+  field.dispatchEvent(new Event('input',{bubbles:true}));
+};
+const submitDraft=(host:HTMLElement)=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+const writeMessage=async(host:HTMLElement,value:string)=>{
+  await act(async()=>setDraft(host,value));
+  await act(async()=>submitDraft(host));
+};
+
 it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary with budget prefix %j',async(prefix)=>{
   Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
   const host=document.createElement('div');
@@ -24,7 +35,10 @@ it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary 
       prompt.dispatchEvent(new Event('input',{bubbles:true}));
     });
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    if(!prefix)await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='5 minutes')!.click());
+    if(!prefix){
+      expect(host.querySelector('[role=log]')?.textContent).toContain('How many minutes can you study?');
+      await writeMessage(host,'5 minutes');
+    }
     expect(host.querySelector('[aria-label="Revision notes"]')).toBeNull();
     expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('AI generation is temporarily unavailable');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('AI generation failed. Please retry.');
@@ -56,33 +70,26 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     await act(async()=>picker.dispatchEvent(new Event('change',{bubbles:true})));
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Type for DBMS_PYQ.pdf"]')?.value).toBe('Past paper');
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    expect(host.textContent).toContain('How much time do you have to prepare?');
-    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Custom')!.click());
-    await act(async()=>setValue(host.querySelector<HTMLInputElement>('#time')!,'5 hours'));
-    await act(async()=>host.querySelector('#time')!.closest('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    expect(host.querySelector('[role=log]')?.textContent).toContain('How many minutes can you study?');
+    await writeMessage(host,'5 hours');
     await act(async()=>{await new Promise(resolve=>setTimeout(resolve,460));});
     expect(host.querySelectorAll('.question')).toHaveLength(0);
     await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
     expect(host.querySelectorAll('.question')).toHaveLength(10);
     expect(document.activeElement?.id).toBe('important-questions');
-    expect(host.querySelector('.setup-collapsed button')?.textContent).toBe('Edit input');
-    expect(host.querySelector('.coach')).toBeNull();
-    await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
-    await act(async()=>setValue(host.querySelector<HTMLInputElement>('[aria-label="Ask about your plan"]')!,'Why #1?'));
-    await act(async()=>host.querySelector('.coach form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    expect(host.querySelectorAll('#prompt')).toHaveLength(1);
+    expect(host.textContent).not.toContain('Study Coach');
+    await writeMessage(host,'Why #1?');
     expect(host.querySelector('[role=log]')?.textContent).toContain('page 1, Q1');
-    await act(async()=>setValue(host.querySelector<HTMLInputElement>('[aria-label="Ask about your plan"]')!,'Only 30 minutes left'));
-    await act(async()=>host.querySelector('.coach form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    await writeMessage(host,'Only 30 minutes left');
     expect(host.querySelector('[role=log]')?.textContent?.indexOf('Only 30 minutes left')).toBeGreaterThan(host.querySelector('[role=log]')?.textContent?.indexOf('Why #1?')??0);
-    await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
     expect(host.querySelector('.summary')?.textContent).toContain('30 min available');
     expect(host.querySelectorAll('.question').length).toBeGreaterThan(0);
     const allocations=[...host.querySelectorAll('.study-timeline strong')].map(item=>parseInt(item.textContent??'0',10));
     expect(allocations.reduce((sum,item)=>sum+item,0)).toBeLessThanOrEqual(30);
-    await act(async()=>host.querySelector<HTMLButtonElement>('.setup-collapsed button')!.click());
-    await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. I have two hours.'));
-    expect(host.querySelector('#results-title')).toBeNull();
-    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Generate Summary');
+    await act(async()=>setDraft(host,'My DBMS exam is tomorrow. I have two hours.'));
+    expect(host.querySelector('#results-title')).not.toBeNull();
+    expect(host.querySelector('.composer [aria-label="Send message"]')).not.toBeNull();
   } finally {
     await act(async()=>root.unmount());
     host.remove();
@@ -122,12 +129,8 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
     await act(async()=>submit('.composer'));
     await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
     expect([...host.querySelectorAll('.question h3')].map(item=>item.textContent)).toEqual(questions.slice(1).map(q=>q.prompt));
-    await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
-    await act(async()=>input('[aria-label="Ask about your plan"]','I only have 45 minutes now.'));
-    await act(async()=>submit('.coach form'));
-    await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
-    expect(host.querySelector('#results-title')).toBeNull();
-    await act(async()=>submit('.composer'));
+    await writeMessage(host,'I only have 45 minutes now.');
+    expect(host.querySelector('#results-title')).not.toBeNull();
     await act(async()=>reveal());
     expect(host.querySelector('.question h3')?.textContent).toBe(questions[0].prompt);
     expect(host.querySelector('.question .source')?.textContent).toContain('p. 1 · Q1');
@@ -136,12 +139,8 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
       checkpoint.value='completed';
       checkpoint.dispatchEvent(new Event('change',{bubbles:true}));
     });
-    await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
-    await act(async()=>input('[aria-label="Ask about your plan"]','I have only 44 minutes left.'));
-    await act(async()=>submit('.coach form'));
-    await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
-    expect(host.querySelector('#results-title')).toBeNull();
-    await act(async()=>submit('.composer'));
+    await writeMessage(host,'I have only 44 minutes left.');
+    expect(host.querySelector('#results-title')).not.toBeNull();
     await act(async()=>reveal());
     expect(host.querySelector<HTMLSelectElement>('.question select')?.value).toBe('completed');
     expect(host.querySelector('.question .checkpoints p')?.textContent).toContain('1/3 checkpoints');
@@ -193,7 +192,7 @@ it('generates study pages on demand and keeps page position and analysis across 
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Help me study DBMS');
       input.dispatchEvent(new Event('input',{bubbles:true}));});
     await act(async()=>{submit();await new Promise(resolve=>setTimeout(resolve,470));});
-    expect(host.textContent).not.toContain('How much time do you have');
+    expect(host.querySelector('[role=log]')?.textContent).not.toContain('How many minutes can you study?');
     expect(host.querySelector('.book-page-number')?.textContent).toMatch(/^Page 1 of /);
     expect(requests.filter(req=>req.studyUnit)).toHaveLength(1);
     await click('Next →');
@@ -208,12 +207,11 @@ it('generates study pages on demand and keeps page position and analysis across 
     expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
     await click('Last Minute',modes);
     await act(async()=>submit());
-    await click('5 minutes');
+    await writeMessage(host,'5 minutes');
     expect(host.querySelector('.summary')?.textContent).toContain('5 min available');
     await click('Study',modes);
     expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
     expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
-    await click('Edit input');
     await act(async()=>{const input=host.querySelector('textarea')!;
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Help me study DBMS I have 15 minutes.');
       input.dispatchEvent(new Event('input',{bubbles:true}));});
@@ -238,6 +236,7 @@ it('offers questions on a prompt-only Study page and lets users retry failed pra
   vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{
     const request=JSON.parse(init.body);
     if(request.task==='practice'){
+      expect(request.priorities[0].id).toBe(1);
       practiceCalls++;
       return practiceCalls===1?Response.json({code:'usage_limit'},{status:429}):
         Response.json({questions:[{id:request.priorities[0].id,prompt:'How can a circular wait lead to deadlock?'}]});
@@ -264,7 +263,7 @@ it('offers questions on a prompt-only Study page and lets users retry failed pra
     expect(practiceCalls).toBe(2);
     await act(async()=>button('Last Minute').click());
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    await act(async()=>button('5 minutes').click());
+    await writeMessage(host,'5 minutes');
     await act(async()=>button('Generate Questions').click());
     expect(host.querySelector('.question h3')?.textContent).toBe('How can a circular wait lead to deadlock?');
     expect(practiceCalls).toBe(3);

@@ -183,11 +183,15 @@ function Sticker({ asset, label }: typeof props[number]) {
   </button>;
 }
 
-export function ThemeHero({ theme, anime, character, transition }: Pick<ReturnType<typeof useTheme>, 'theme' | 'anime' | 'character' | 'transition'>) {
-  return <section className={'hero' + (anime ? ' hero-anime' : theme === 'cute' ? ' hero-cute' : '')}>
-    <h1>Exam <em>planner</em></h1>
-    {anime && character && <CharacterScene key={character.id} anime={anime} character={character}/>}
-    {theme === 'cute' && <div className="cute-desk">{props.map(prop => <Sticker key={prop.asset} {...prop}/>)}</div>}
-    {transition > 0 && <span key={transition} className="theme-transition" aria-hidden="true"/>}
+export function ThemeHero({theme,anime,character,transition,headline,description,compact}:Pick<ReturnType<typeof useTheme>,
+  'theme'|'anime'|'character'|'transition'>&{headline:string;description:string;compact:boolean}) {
+  return <section className={'hero'+(compact?' hero-compact':anime?' hero-anime':theme==='cute'?' hero-cute':'')}>
+    <div>
+      <h1>{headline}</h1>
+      <p>{description}</p>
+    </div>
+    {!compact&&anime&&character&&<CharacterScene key={character.id} anime={anime} character={character}/>}
+    {!compact&&theme==='cute'&&<div className="cute-desk">{props.map(prop=><Sticker key={prop.asset} {...prop}/>)}</div>}
+    {transition>0&&<span key={transition} className="theme-transition" aria-hidden="true"/>}
   </section>;
 }

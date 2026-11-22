@@ -58,7 +58,8 @@ button:disabled{opacity:.55;cursor:default}
 .badge{gap:.4rem;color:var(--muted);background:var(--subtle);border:1px solid var(--line);border-radius:999px;padding:.3rem .65rem;font-size:.8rem;white-space:nowrap}
 .link{border:0;background:transparent;padding:.4rem .15rem;font-size:.9rem;font-weight:650}
 .link:hover{text-decoration:underline}
-.landing,.workspace{position:relative;padding-bottom:2rem}
+#root{display:flex;flex-direction:column;min-height:100dvh}
+.landing,.workspace{position:relative;display:flex;flex:1;flex-direction:column}
 .hero{text-align:center;padding:clamp(2rem,7vw,4.5rem) 0 1.3rem}
 .workspace .hero{padding-top:2.75rem}
 .hero h1{font-size:clamp(2.25rem,7vw,4.5rem);font-weight:650;letter-spacing:-.065em;line-height:1.06;margin:0}
@@ -125,10 +126,6 @@ h3{font-size:1.12rem;font-weight:750;margin:.5rem 0 .3rem}
 @media(max-width:510px){.checkpoints label{grid-template-columns:1fr}}
 .messages{overflow:auto;overscroll-behavior:contain}
 .messages p{white-space:pre-wrap;overflow-wrap:anywhere}
-.coach-turn{display:grid;gap:.8rem;padding:.8rem 0;border-bottom:1px solid var(--line)}
-.coach-message{min-width:0;overflow-wrap:anywhere}
-.coach-message small,.coach-message summary{font-size:.8rem;color:var(--muted)}
-.coach-message summary{cursor:pointer;width:max-content}
 .coach-meta{display:flex;align-items:baseline;gap:.6rem}
 .coach-answer ul,.coach-answer ol{padding-inline-start:1.5rem;margin:.4rem 0}
 .coach-answer ul{list-style:disc}
@@ -301,7 +298,6 @@ dialog::backdrop{background:var(--backdrop)}
 .study-drawer li button:is(:hover,[aria-current="page"]){background:var(--subtle);color:var(--ink)}
 .study-drawer li button[aria-current="page"]{font-weight:700}
 .study-drawer li span{min-width:1.3rem;color:var(--muted);font-variant-numeric:tabular-nums}
-.drawer-coach{margin-top:1rem}
 .quick-times{flex-wrap:wrap;margin:.65rem 0}
 .processing-details{margin:.8rem 0;color:var(--muted)}
 .study-book{width:min(100%,48rem);margin:1.5rem auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:clamp(1rem,4vw,2rem)}
@@ -313,12 +309,10 @@ dialog::backdrop{background:var(--backdrop)}
 .book-content summary,.book-coverage summary,.processing-details summary{cursor:pointer}
 .book-pagination{justify-content:space-between;margin-top:1.4rem;padding-top:.8rem;border-top:1px solid var(--line)}
 .book-page-feedback{min-height:3rem;color:var(--muted)}
-.coach-page-topic{margin:0 0 .6rem;color:var(--muted)}
 @media(max-width:600px){
   .book-brand{gap:.25rem}
   .header-inner{gap:.4rem}
   .book-brand .brand{font-size:1.05rem}
-  .header-inner nav[aria-label="Workspace"]{font-size:.8rem}
 }
 
 /* Shared study layout */
@@ -328,10 +322,7 @@ dialog::backdrop{background:var(--backdrop)}
 .exam-overview .summary{margin:.35rem 0;font-weight:600}
 .exam-overview:empty{display:none}
 .review-notice{color:var(--accent);text-align:left}
-.submitted-input{color:var(--muted);font-size:.9rem;margin:.45rem 0}
-.submitted-input p,.submitted-input li{white-space:pre-wrap;overflow-wrap:anywhere}
 .setup{margin-top:1rem}
-.setup-collapsed{position:sticky;bottom:0;z-index:2;background:var(--page);padding:.6rem 0 max(.6rem,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
 .results{margin-top:1.25rem}
 .results-questions{margin-top:1.2rem}
 .study-note{padding:0;border:0;background:transparent}
@@ -342,7 +333,7 @@ dialog::backdrop{background:var(--backdrop)}
 .question{position:relative;padding:1rem 0;margin:0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent}
 .question-meta{padding-inline-end:3rem}
 .question h3{line-height:1.45;overflow-wrap:anywhere}
-.question-answer summary,.checkpoints summary,.source-status summary,.submitted-input summary,.info-content summary,.question-info summary{cursor:pointer;padding:.5rem 0}
+.question-answer summary,.checkpoints summary,.source-status summary,.info-content summary,.question-info summary{cursor:pointer;padding:.5rem 0}
 .question-answer .coach-answer{padding:.25rem 0}
 .question-info>summary{position:absolute;top:.3rem;right:0;list-style:none;min-width:44px;min-height:44px;display:grid;place-items:center;font-size:1.1rem}
 .question-info>summary::-webkit-details-marker{display:none}
@@ -350,23 +341,34 @@ dialog::backdrop{background:var(--backdrop)}
 .question .checkpoints{margin:0;border:0;padding:0}
 .info-heading{display:flex;gap:.8rem;align-items:center;justify-content:space-between;margin-bottom:.75rem}
 .info-heading h2{font-size:1.35rem}
+.product-links{display:flex;flex-wrap:wrap;gap:.8rem}
 .info-content .document-review{border:0;padding:0}
 .info-content .download-menu{position:static;width:min(17rem,100%);box-shadow:none;margin:.4rem 0}
 .info-content .study-actions{align-items:start}
 .book-pagination .secondary{white-space:nowrap}
 .book-pagination span{text-align:center}
-.coach-workspace{width:min(100% - 2rem,48rem)}
-#study-coach{display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:.65rem;height:var(--coach-available-height,calc(100dvh - 69px));padding:.65rem 0 max(.5rem,env(safe-area-inset-bottom));background:transparent;border:0;border-radius:0;box-shadow:none}
-#study-coach h1{font-size:clamp(1.35rem,4vw,1.8rem);font-weight:750}
-.chat-area{min-height:0;position:relative}
-#study-coach .messages{height:100%;padding:0 .25rem .5rem;overflow-anchor:none}
-.coach-user{justify-self:end;max-width:90%;padding:.5rem .8rem;background:var(--subtle);border-radius:.75rem}
-.coach-reply{min-width:0}
-.messages .coach-message p,.question .coach-answer p{color:var(--ink)}
+.conversation{width:min(100%,48rem);margin:1rem auto}
+.chat-area{position:relative}
+.conversation .messages{max-height:min(32rem,55dvh);padding:0 .2rem .4rem;overflow-anchor:none}
+.conversation-message{min-width:0;margin:.5rem 0;overflow-wrap:anywhere}
+.message-user{width:fit-content;max-width:90%;margin-inline-start:auto;padding:.55rem .8rem;background:var(--subtle);border-radius:.85rem}
+.messages .message-user p,.messages .message-reply p,.question .coach-answer p{color:var(--ink)}
 .messages .coach-answer p{white-space:normal}
-.coach-composer{gap:.5rem}
-.coach-composer input{min-height:44px;font-size:1rem}
-.coach-composer .icon-btn{min-width:44px;min-height:44px}
+.message-reply{margin-bottom:1rem}
+.message-reply [role="status"]{color:var(--muted)}
+.unified-composer{position:sticky;margin-block:auto 0;padding-top:.65rem;bottom:var(--composer-inset,0px);z-index:3;padding-bottom:max(.55rem,env(safe-area-inset-bottom));background:var(--page)}
+.unified-composer .composer{padding:.7rem}
+.unified-composer textarea{margin:0 0 .45rem;padding:.25rem;min-height:3rem;max-height:26dvh;font-size:1rem}
+.unified-composer .primary.icon-btn{min-width:44px;min-height:44px}
+.unified-composer .files{max-height:8rem;overflow:auto;margin:.3rem 0}
+.message-actions,.discussion-context{display:flex;align-items:center;gap:.55rem}
+.discussion-context{justify-content:space-between;padding:.3rem .65rem;background:var(--subtle);border-radius:var(--radius)}
+.discussion-context span{min-width:0;overflow-wrap:anywhere}
+.discussion-context button{flex:none}
+.exam-settings{padding:.25rem .3rem}
+.hero p{color:var(--muted);margin:.65rem 0 0;font-size:.95rem}
+.hero.hero-compact,.workspace .hero.hero-compact{padding:.35rem 0 .7rem}
+.hero-compact h1{font-size:clamp(1.55rem,5vw,2.4rem)}
 .jump-latest{position:absolute;inset:auto .8rem .6rem auto;box-shadow:0 2px 8px #0002}
 .coach-answer{line-height:1.65;overflow-wrap:anywhere}
 .coach-answer h1,.coach-answer h2,.coach-answer h3,.coach-answer h4,.coach-answer h5,.coach-answer h6{font-size:1.06rem;line-height:1.35;font-weight:750;margin:.85rem 0 .25rem}
@@ -378,10 +380,11 @@ dialog::backdrop{background:var(--backdrop)}
 .answer-table th,.answer-table td{padding:.35rem .6rem;border:1px solid var(--line);text-align:start}
 @media(max-width:510px){
   .header-inner{flex-wrap:wrap;padding-block:.35rem}
-  .header-inner nav[aria-label="Workspace"] a{display:inline-flex;align-items:center;min-height:44px;white-space:nowrap}
   .header-tools{gap:.15rem}
   .header-tools .icon-btn,.book-brand>.icon-btn{width:44px;padding:.4rem}
   .preparation-modes button{min-height:44px}
-  .composer textarea{font-size:1rem}
+  .message-actions .link{padding:.4rem .15rem;font-size:.8rem}
+  .conversation .messages{max-height:43dvh}
+  .unified-composer .composer-actions>.secondary{padding-inline:.5rem}
   .book-pagination{gap:.3rem}
 }

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, FormEvent } from 'react';
+import type { ChangeEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { demoApi, duration, fitQuestions, materialType } from './api';
 import type { Analysis, Context, ExamApi, Material, Question, Source } from './api';
@@ -28,7 +28,7 @@ const preparationLabels={completed:'Checkpoints completed',revision:'Needs revis
 type Page = 'pricing'|'privacy'|'terms';
 type PreparationMode = 'last-minute'|'study';
 type BookContent = {text:string;references:CoachSource[];webLimited:boolean};
-const studyTimes=[[5,'5 minutes'],[15,'15 minutes'],[30,'30 minutes'],[60,'1 hour']] as const;
+type Discussion = {title:string;text:string;sources:readonly Source[]};
 
 function practiceSeed(id:number,topic:string,answerSource?:Source):Question {
   return {id,topic,prompt:'What are the key points to remember about '+topic+'?',minutes:0,marks:0,unit:0,
@@ -38,8 +38,8 @@ function practiceSeed(id:number,topic:string,answerSource?:Source):Question {
 type CoachSource = (Source & {kind:'uploaded';id:string}) | {kind:'web';id:string;title:string;url:string};
 type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subject:string;topics:string[];studyPage?:{title:string;text:string};
   history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
-type Message = {role:'You'|'Demo coach'|'in-nocent';text:string;references?:CoachSource[];
-  generated?:boolean;pending?:boolean;error?:string;retry?:CoachRequest};
+type Message = {role:'You'|'Demo assistant'|'in-nocent';text:string;references?:CoachSource[];
+  generated?:boolean;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest};
 
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'|'menu'}) {
   const paths = {
@@ -81,9 +81,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const sampleMode=activeApi===demoApi;
   const [mode,setMode]=useState<PreparationMode>('last-minute');
   const [drawerOpen,setDrawerOpen]=useState(false);
+  useEffect(()=>{
+    if(location.hash==='#study-coach')history.replaceState(null,'','#main');
+  },[]);
   const drawerToggle=useRef<HTMLButtonElement>(null);
   const drawerPanel=useRef<HTMLElement>(null);
-  const [customTime,setCustomTime]=useState(false);
   const [savedBook,setBook]=useState<{subject:string;pages:BookPage[];demo:boolean;promptKey:string}|null>(null);
   const [bookIndex,setBookIndex]=useState(0);
   const [bookContent,setBookContent]=useState<Record<string,BookContent>>({});
@@ -99,7 +101,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [files,setFiles]=useState<Material[]>([]);
   const [notice,setNotice]=useState('');
   const [needsTime,setNeedsTime]=useState(false);
-  const [timeReply,setTimeReply]=useState('');
   const [busy,setBusy]=useState(false);
   const [documents,setDocuments]=useState<ExtractedDocument[]>([]);
   const [processingMessage,setProcessingMessage]=useState('');
@@ -107,7 +108,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const controller=useRef<AbortController|null>(null);
   const [planGenerated,setPlanGenerated]=useState(false);
   const [revision,setRevision]=useState<Revision|null>(null);
-  const [editing,setEditing]=useState(false);
   const [showQuestions,setShowQuestions]=useState(false);
   const questionsHeading=useRef<HTMLHeadingElement>(null);
   useEffect(()=>{
@@ -117,10 +117,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   },[showQuestions]);
   const [aiNote,setAiNote]=useState('');
   const [aiReferences,setAiReferences]=useState<CoachSource[]>([]);
-  const [coachPage,setCoachPage]=useState(()=>typeof location!=='undefined'&&location.hash==='#study-coach');
-  useEffect(()=>{const read=()=>setCoachPage(location.hash==='#study-coach');window.addEventListener('hashchange',read);return ()=>window.removeEventListener('hashchange',read);},[]);
   const resultHeading=useRef<HTMLHeadingElement>(null);
-  useEffect(()=>{if(planGenerated&&!editing){resultHeading.current?.focus();resultHeading.current?.scrollIntoView?.({block:'start'});}},[planGenerated,editing]);
+  useEffect(()=>{
+    if(planGenerated&&mode==='last-minute'){
+      resultHeading.current?.focus({preventScroll:true});
+      resultHeading.current?.scrollIntoView?.({block:'start'});
+    }
+  },[planGenerated,mode]);
   const [dragging,setDragging]=useState(false);
   const [result,setResult]=useState<readonly Question[]|null>(null);
   const [warnings,setWarnings]=useState<string[]>([]);
@@ -140,44 +143,49 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const chatLog=useRef<HTMLDivElement>(null);
   const chatTranscript=useRef<HTMLDivElement>(null);
   const followChat=useRef(true);
+  const revealLatest=useRef(false);
   const [showLatest,setShowLatest]=useState(false);
-  const coachSection=useRef<HTMLElement>(null);
+  const composer=useRef<HTMLElement>(null);
+  const [draft,setDraft]=useState('');
+  const [assistantPending,setAssistantPending]=useState(false);
+  const [discussion,setDiscussion]=useState<Discussion|null>(null);
+  const [needsSubject,setNeedsSubject]=useState(false);
+  const [newAttachments,setNewAttachments]=useState(false);
   function scrollChatToLatest(){
     followChat.current=true;
     if(chatLog.current)chatLog.current.scrollTop=chatLog.current.scrollHeight;
     setShowLatest(false);
   }
   useLayoutEffect(()=>{
-    if(coachPage&&followChat.current)scrollChatToLatest();
-  },[coachPage,messages]);
+    if(followChat.current)scrollChatToLatest();
+    if(revealLatest.current){
+      revealLatest.current=false;
+      chatLog.current?.scrollIntoView?.({block:'nearest'});
+    }
+  },[messages]);
   useLayoutEffect(()=>{
-    if(!coachPage||!chatTranscript.current||typeof ResizeObserver!=='function')return;
+    if(!chatTranscript.current||typeof ResizeObserver!=='function')return;
     const observer=new ResizeObserver(()=>{
       if(followChat.current)scrollChatToLatest();
     });
     observer.observe(chatTranscript.current);
     return ()=>observer.disconnect();
-  },[coachPage]);
+  },[]);
   useLayoutEffect(()=>{
-    if(!coachPage)return;
     const viewport=window.visualViewport;
-    const section=coachSection.current;
+    const section=composer.current;
     if(!viewport||!section)return;
-    // The mobile keyboard can shrink the visual viewport without resizing the layout viewport.
     const resize=()=>{
-      const top=section.getBoundingClientRect().top+window.scrollY;
-      section.style.setProperty('--coach-available-height',Math.max(140,viewport.height-top)+'px');
-      if(followChat.current)scrollChatToLatest();
+      const obscured=Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop);
+      section.style.setProperty('--composer-inset',obscured+'px');
     };
-    resize();
     viewport.addEventListener('resize',resize);
-    return ()=>viewport.removeEventListener('resize',resize);
-  },[coachPage]);
-  const [chat,setChat]=useState('');
-  const [coachPending,setCoachPending]=useState(false);
-  const [coachPagePrompt,setCoachPagePrompt]=useState(false);
-  const [needsSubject,setNeedsSubject]=useState(false);
-  const [subjectReply,setSubjectReply]=useState('');
+    viewport.addEventListener('scroll',resize);
+    return ()=>{
+      viewport.removeEventListener('resize',resize);
+      viewport.removeEventListener('scroll',resize);
+    };
+  },[]);
   const [summaryWebLimited,setSummaryWebLimited]=useState(false);
   const [limit,setLimit]=useState(10);
   const [page,setPage]=useState<Page|null>(null);
@@ -204,12 +212,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     return ()=>window.removeEventListener('keydown',navigate);
   },[drawerOpen]);
   useEffect(()=>{
-    if(mode!=='study'||coachPage||!activeBookPage)return;
+    if(mode!=='study'||!activeBookPage)return;
     studyHeading.current?.focus({preventScroll:true});
     studyHeading.current?.scrollIntoView?.({block:'start'});
-  },[activeBookPage,coachPage,mode]);
+  },[activeBookPage,mode]);
   useEffect(()=>{
-    if(mode!=='study'||coachPage||!book||!activeBookPage||loadingPage||bookRequest.current
+    if(mode!=='study'||!book||!activeBookPage||loadingPage||bookRequest.current
       ||bookContent[activeBookPage.id]||bookErrors[activeBookPage.id])return;
     const unit=activeBookPage;
     if(book.demo){
@@ -237,7 +245,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         if(bookRequest.current===operation){bookRequest.current=null;setLoadingPage(null);}
       }
     })();
-  },[activeBookPage,book,bookContent,bookErrors,coachPage,loadingPage,mode]);
+  },[activeBookPage,book,bookContent,bookErrors,loadingPage,mode]);
   useEffect(()=>{
     const file=files.find(item=>item.id===source?.documentIndex)?.file;
     if(!file){setSourceUrl('');return;}
@@ -260,10 +268,33 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       accepted.push({id:++nextFile.current,file,kind:materialType(file.name)});
     }
     setFiles([...files,...accepted]);
-    if(accepted.length){clearBook();setPlanGenerated(false);setAwaitReview(false);}
+    if(accepted.length){clearBook();setPlanGenerated(false);setAwaitReview(false);setNewAttachments(true);}
     setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 files of 20 MB each. Use PDF, DOCX, PPTX, PNG, JPEG, WebP, or BMP. Save older .ppt files as .pptx.' : '');
   };
-  const editPrompt=(value:string)=>{setPrompt(value);const parsed=activeApi.parse(value);setContext(current=>({...parsed,minutes:parsed.minutes||current.minutes}));setNeedsTime(false);setNeedsSubject(false);setPlanGenerated(false);};
+  function preparationContext(value:string):Context {
+    const parsed=activeApi.parse(value);
+    return {
+      subject:parsed.subject||context.subject,
+      date:parsed.date||context.date,
+      minutes:parsed.minutes||context.minutes,
+      pass:parsed.pass||context.pass,
+      pattern:parsed.pattern||context.pattern,
+      familiarity:parsed.familiarity==='unknown'?context.familiarity:parsed.familiarity
+    };
+  }
+  function appendAssistant(text:string) {
+    setMessages(current=>[...current,{role:'in-nocent',text,status:true}]);
+  }
+  function appendUser(text:string) {
+    followChat.current=true;
+    revealLatest.current=true;
+    setMessages(current=>[...current,{role:'You',text}]);
+    setDraft('');
+  }
+  function requestSubject(){
+    setNeedsSubject(true);
+    appendAssistant('What subject or topic should we study?');
+  }
   const restartBudget=()=>{timeAnchor.current=Date.now();setElapsed(0);};
   const update=<K extends keyof Context,>(key:K,value:Context[K])=>{
     if(key==='minutes')restartBudget();
@@ -272,28 +303,38 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setContext(current=>({...current,[key]:value}));
     if(!sampleMode||key!=='minutes'&&key!=='familiarity')setPlanGenerated(false);
   };
-  async function generate(event?:FormEvent, adjusted=context,attempt:'normal'|'retry'|'continue'='normal') {
-    event?.preventDefault();
+  async function readDocuments(run:AbortController,retry=false){
+    let records=documents.filter(document=>files.some(file=>file.id===document.id));
+    if(activeApi.prepare&&files.length&&(retry||files.some(file=>!records.some(document=>document.id===file.id)))){
+      records=await activeApi.prepare(files,{records,signal:run.signal,retry,
+        onUpdate:({documents:updated,message})=>{setDocuments(updated);setProcessingMessage(message);}});
+      run.signal.throwIfAborted();
+      setDocuments(records);
+    }
+    return records;
+  }
+  async function generate(adjusted=context,attempt:'normal'|'retry'|'continue'='normal',inputPrompt=prompt) {
     if(controller.current) return;
-    if(!prompt.trim() && !files.length) {setNotice('Describe your exam or attach a file to begin.');return;}
+    if(!inputPrompt.trim() && !files.length) {setNotice('Describe your exam or attach a file to begin.');return;}
     const studying=mode==='study';
-    if(!studying&&!adjusted.minutes){setCustomTime(false);setNeedsTime(true);return;}
+    if(!studying&&!adjusted.minutes){
+      if(!needsTime)appendAssistant('How many minutes can you study?');
+      setNeedsTime(true);
+      return;
+    }
     if(studying)adjusted={...adjusted,minutes:0};
-    setNeedsTime(false);setNeedsSubject(false);setNotice('');setBusy(true);
+    if(!studying)setNeedsTime(false);
+    setNeedsSubject(false);setNotice('');setBusy(true);
     const run=new AbortController();
     controller.current=run;
     setProcessingMessage(activeApi.prepare&&files.length?'Opening attachments…':'Building your plan…');
     try {
-      let records=documents.filter(document=>files.some(file=>file.id===document.id));
-      if(activeApi.prepare&&files.length&&(attempt==='retry'||files.some(file=>!records.some(document=>document.id===file.id)))){
-        records=await activeApi.prepare(files,{records,signal:run.signal,retry:attempt==='retry',
-          onUpdate:({documents:updated,message})=>{setDocuments(updated);setProcessingMessage(message);}});
-        setDocuments(records);
-        if(records.some(document=>!documentComplete(document)) && !revise(prompt,records,files,adjusted.subject) && !records.some(document=>document.pages.some(page=>page.text.trim()&&(page.status==='extracted'||page.status==='verified')))){
-          setNotice('No readable material was found. Check the original or retry the attachment.');
-          setAwaitReview(true);
-          return;
-        }
+      const records=await readDocuments(run,attempt==='retry');
+      if(records.some(document=>!documentComplete(document))&&!revise(inputPrompt,records,files,adjusted.subject)
+        &&!records.some(document=>document.pages.some(page=>page.text.trim()&&isTrusted(page)))){
+        setNotice('No readable material was found. Check the original or retry the attachment.');
+        setAwaitReview(true);
+        return;
       }
       run.signal.throwIfAborted();
       setAwaitReview(false);
@@ -304,14 +345,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       if(!adjusted.subject&&inspected.subject){
         adjusted={...adjusted,subject:inspected.subject};setContext(current=>({...current,subject:inspected.subject}));
       }
-      const requestedTopic=studying?studyTopic(prompt):'';
-      const extracted=sampleMode?null:revise(requestedTopic?'':prompt,records,classified,adjusted.subject);
-      const analysisKey=JSON.stringify([promptKey,classified.map(file=>[file.id,file.kind]),records]);
+      const requestedTopic=studyTopic(inputPrompt);
+      const extracted=sampleMode?null:revise(requestedTopic?'':inputPrompt,records,classified,adjusted.subject);
+      const analysisKey=JSON.stringify([studySessionPrompt(inputPrompt),classified.map(file=>[file.id,file.kind]),records]);
       const cached=!sampleMode&&analyzed.current?.key===analysisKey?analyzed.current.analysis:null;
       const runProgress=cached?progress:{};
       let analysis:Analysis;
       try {
-        analysis=cached??await activeApi.analyze(adjusted, classified, prompt,{documents:records,signal:run.signal,
+        analysis=cached??await activeApi.analyze(adjusted, classified, inputPrompt,{documents:records,signal:run.signal,
           onPlanning:()=>setProcessingMessage('Matching equivalent questions and building your plan…')});
       } catch(error) {
         run.signal.throwIfAborted();
@@ -325,23 +366,24 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       if(studying){
         const fallback=requestedTopic?[requestedTopic]:extracted?[extracted.title]:inspected.topics.length?inspected.topics:[adjusted.subject].filter(Boolean);
         const pages=bookOutline(analysis,fallback,extracted?.passages??[]);
-        if(!pages.length){setNeedsSubject(true);return;}
+        if(!pages.length){requestSubject();return;}
         clearBook();
-        setBook({subject:adjusted.subject||requestedTopic,pages,demo:sampleMode,promptKey});
+        setBook({subject:adjusted.subject||requestedTopic,pages,demo:sampleMode,promptKey:studySessionPrompt(inputPrompt)});
         setResult(analysis.questions);setWarnings(analysis.warnings);
         setOptimization(analysis.optimization?{data:analysis.optimization}:null);
         setProgress(runProgress);
-        setEditing(false);
+        setNewAttachments(false);
+        appendAssistant('Your study outline is ready. See the first page below.');
         return;
       }
       const scope=prepareScope(analysis,adjusted,runProgress);
       const summary=extracted??revisionFromAnswer(scope.questions.find(question=>question.answerSource))
         ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
       const topics=[...new Set(scope.questions.length?scope.questions.map(question=>question.topic):
-        summary?[summary.title]:inspected.topics)].slice(0,adjusted.minutes<=15?3:6);
+        summary?[summary.title]:requestedTopic?[requestedTopic]:inspected.topics)].slice(0,adjusted.minutes<=15?3:6);
       const sources=[...new Map([...scope.questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),
         ...(summary?.passages??[])].map(source=>[source.excerpt,source])).values()].slice(0,8);
-      if(!sampleMode&&!summary&&!adjusted.subject&&!topics.length){setNeedsSubject(true);return;}
+      if(!sampleMode&&!summary&&!adjusted.subject&&!topics.length){requestSubject();return;}
       setAiNote('');
       setAiReferences([]);
       setSummaryWebLimited(false);
@@ -350,11 +392,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         try {
           const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(50000)]),
             body:JSON.stringify({task:'notes',mode:'auto',subject:adjusted.subject,topics,minutes:adjusted.minutes,
-              topic:scope.questions.length?topics[0]:summary?.title??adjusted.subject,request:'Write a concise revision summary for '+(adjusted.subject||summary?.title||'the supplied study topics')+'.',
+              topic:scope.questions.length?topics[0]:summary?.title??(requestedTopic||adjusted.subject),request:'Write a concise revision summary for '+(requestedTopic||adjusted.subject||summary?.title||'the supplied study topics')+'.',
               priorities:scope.questions.map(question=>({topic:question.topic,prompt:question.prompt})),sources})});
           const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
           if(!response.ok||!data.explanation?.trim()){
-            if(data.code==='subject_required')setNeedsSubject(true);
+            if(data.code==='subject_required')requestSubject();
             else if(data.code==='citation_validation_failed')setNotice('The summary’s sources could not be verified. Try generating it again.');
             else setNotice(data.code==='usage_limit'?'The AI usage limit has been reached. Try again later.':'AI generation failed. Please retry.');
             return;
@@ -368,11 +410,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         }
       }
       practiceRun.current?.abort();setPracticePending(false);
-      setRevision(summary);setEditing(false);setShowQuestions(false);
+      setRevision(summary);setShowQuestions(false);
       run.signal.throwIfAborted();
       setResult(analysis.questions);setWarnings(analysis.warnings);
       setOptimization(analysis.optimization?{data:analysis.optimization}:null);
-      setPreparedScope(scope);setProgress(runProgress);restartBudget();setLimit(10);setPlanGenerated(true); }
+      setPreparedScope(scope);setProgress(runProgress);restartBudget();setLimit(10);setPlanGenerated(true);setNewAttachments(false);appendAssistant('Your Must Read summary is ready below.'); }
     catch(error) { setNotice(run.signal.aborted?'Processing cancelled. Run again to resume from usable pages.':error instanceof Error?error.message:'The study plan could not load. Try again.'); }
     finally {controller.current=null;setProcessingMessage('');setBusy(false);}
   }
@@ -419,13 +461,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     pack.questions=pack.questions.map(entry=>({...entry,minutes:reviewAllocations[entry.question.id]??0}));
   }
   const nextAction=pack.timeline[0];
-  const activeCoachRequest=useRef<AbortController|null>(null);
-  useEffect(()=>()=>{activeCoachRequest.current?.abort();practiceRun.current?.abort();},[]);
-  async function askCoach(message:Message,request:CoachRequest) {
-    if(activeCoachRequest.current)return;
+  const activeAssistantRequest=useRef<AbortController|null>(null);
+  useEffect(()=>()=>{activeAssistantRequest.current?.abort();practiceRun.current?.abort();},[]);
+  async function askAssistant(message:Message,request:CoachRequest) {
+    if(activeAssistantRequest.current)return;
     const operation=new AbortController();
-    activeCoachRequest.current=operation;
-    setCoachPending(true);
+    activeAssistantRequest.current=operation;
+    setAssistantPending(true);
     let reply:Message;
     try{
       const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -441,17 +483,24 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         ?error.message:'Couldn’t answer right now. Try again.';
       reply={...message,error:errorMessage,retry:request};
     }finally{
-      if(activeCoachRequest.current===operation){activeCoachRequest.current=null;setCoachPending(false);}
+      if(activeAssistantRequest.current===operation){activeAssistantRequest.current=null;setAssistantPending(false);}
     }
     setMessages(current=>current.map(item=>item===message?{...reply,pending:false}:item));
   }
-  function send(value:string) {
+  async function send(value:string) {
     const text=value.trim();
-    if(!text||activeCoachRequest.current)return;
+    if(!text||controller.current||activeAssistantRequest.current)return;
     const minutes=duration(text);
     const familiarity=familiarityFrom(text);
     let reply:string|undefined;
-    if(result&&minutes&&/\b(left|remaining|replan|can study|I (?:only )?have)\b/i.test(text)&&!text.includes('?')){
+    if(mode==='last-minute'&&result&&minutes&&/\b(left|remaining|replan|can study|I (?:only )?have)\b/i.test(text)&&!text.includes('?')){
+      if(!sampleMode){
+        const adjusted={...context,minutes,familiarity:familiarity==='unknown'?context.familiarity:familiarity};
+        appendUser(text);
+        setContext(adjusted);setPlanGenerated(false);
+        await generate(adjusted,'continue');
+        return;
+      }
       update('minutes',minutes);setLimit(10);
       if(familiarity!=='unknown')update('familiarity',familiarity);
       reply='Updated the plan for '+minutes+' minutes, including time for recall.';
@@ -465,53 +514,149 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       reply=limit<fitted.length?'I added the next questions below.':'The current materials and study budget support '+fitted.length+' questions.';
     }
     if(sampleMode&&!reply)reply=activeApi.chat(text,visible.map((question,index)=>({...question,id:index+1})));
-    const message:Message={role:sampleMode?'Demo coach':'in-nocent',text:reply??'',pending:!reply};
+    const message:Message={role:sampleMode?'Demo assistant':'in-nocent',text:reply??'',pending:!reply};
     followChat.current=true;
-    setMessages(current=>[...current,{role:'You',text},message]);setChat('');
+    revealLatest.current=true;
+    setMessages(current=>[...current,{role:'You',text},message]);setDraft('');
     if(reply)return;
+
+    let records=documents;
+    let retrievalFiles=files;
+    let subject=context.subject||book?.subject||'';
+    if(activeApi.prepare&&files.some(file=>!documents.some(document=>document.id===file.id))){
+      const run=new AbortController();
+      controller.current=run;
+      setBusy(true);
+      setProcessingMessage('Opening attachments…');
+      try{
+        records=await readDocuments(run);
+        const inspected=inspectStudyInput(records,files);
+        retrievalFiles=inspected.files;
+        setFiles(retrievalFiles);
+        if(!subject&&inspected.subject){
+          subject=inspected.subject;
+          setContext(current=>({...current,subject:inspected.subject}));
+        }
+        setNewAttachments(false);
+      }catch(error){
+        const failure=run.signal.aborted?'Attachment processing was cancelled.':'The attachments could not be opened. Try sending your question again.';
+        setMessages(current=>current.map(item=>item===message?{...message,pending:false,error:failure}:item));
+        return;
+      }finally{
+        if(controller.current===run)controller.current=null;
+        setBusy(false);setProcessingMessage('');
+      }
+    }
 
     const topics=[...new Set((optimization?.data.topics.map(topic=>topic.title)??(result??[]).map(question=>question.topic)))].slice(0,20);
     const numbered=text.match(/(?:#|question\s+)(\d+)/i);
     const selected=numbered?visible[Number(numbered[1])-1]:undefined;
     const previousQuestion=messages.filter(item=>item.role==='You').at(-1)?.text??'';
     const query=new Set((text+' '+previousQuestion+' '+(selected?.topic??'')+' '+topics.join(' ')).toLowerCase().match(/[a-z]{4,}/g)??[]);
-    const retrieved=documents.flatMap(document=>{
-      if(files.find(file=>file.id===document.id)?.kind==='Past paper')return [];
+    const retrieved=records.flatMap(document=>{
+      const kind=retrievalFiles.find(file=>file.id===document.id)?.kind;
+      if(kind==='Past paper'||kind==='Administrative'||kind==='Unreadable')return [];
       return document.pages.filter(isTrusted).flatMap(page=>page.text.split(/\n+/).map((line,index)=>({
         file:document.name,page:page.number,number:'Line '+(index+1),documentIndex:document.id,excerpt:line.trim().slice(0,650),
       })));
     }).map(source=>({source,score:[...new Set(source.excerpt.toLowerCase().match(/[a-z]{4,}/g)??[])].filter(word=>query.has(word)).length}))
       .filter(match=>match.score>0).sort((a,b)=>b.score-a.score).slice(0,8).map(match=>match.source);
-    const unit=mode==='study'&&activeBookPage&&(coachPagePrompt||/\b(?:this|the current) (?:page|chapter|section)\b/i.test(text))?activeBookPage:null;
-    setCoachPagePrompt(false);
-    const candidates=[...(unit?.passages??[]),selected?.answerSource,...(unit?[]:retrieved),...(revision?.passages??[]),...fitted.map(question=>question.answerSource)]
+    const unit=mode==='study'&&activeBookPage&&/\b(?:this|the current) (?:page|chapter|section)\b/i.test(text)?activeBookPage:null;
+    const summaryContext=mode==='last-minute'&&planGenerated&&/\b(?:this|the current|my) (?:summary|notes)\b/i.test(text)
+      ?{title:revision?.title||context.subject||'Must Read',text:aiNote,sources:revision?.passages??[]}:null;
+    const target=discussion??(unit?{title:unit.title,text:bookContent[unit.id]?.text??'',sources:unit.passages}:summaryContext);
+    setDiscussion(null);
+    const candidates=[...(target?.sources??[]),selected?.answerSource,...(target?[]:retrieved),...(planGenerated?revision?.passages??[]:[]),...fitted.map(question=>question.answerSource)]
       .filter((candidate):candidate is Source=>Boolean(candidate));
     const sources=[...new Map(candidates.map(candidate=>[candidate.excerpt,candidate])).values()].slice(0,12);
     const history:CoachRequest['history']=[];
-    for(let index=0;index<messages.length;index+=2){
-      const [user,assistant]=messages.slice(index,index+2);
-      if(user?.role==='You'&&assistant?.text&&!assistant.error&&!assistant.pending){
-        history.push({role:'user',content:user.text},{role:'assistant',content:assistant.text});
+    for(let index=1;index<messages.length;index++){
+      const user=messages[index-1],assistant=messages[index];
+      if(user.role==='You'&&assistant.role!=='You'&&assistant.text&&!assistant.error&&!assistant.pending){
+        history.push({role:'user',content:user.text.slice(0,1500)},{role:'assistant',content:assistant.text});
       }
     }
-    void askCoach(message,{request:text,mode:'auto',task:/\bmarks?\b/i.test(text)?'exam':'chat',
-      topic:unit?.title??selected?.topic,subject:context.subject||book?.subject||'',topics,
-      studyPage:unit?{title:unit.title,text:bookContent[unit.id]?.text.slice(0,1400)??''}:undefined,
+    void askAssistant(message,{request:text,mode:'auto',task:/\bmarks?\b/i.test(text)?'exam':'chat',
+      topic:target?.title??selected?.topic,subject,topics,
+      studyPage:target?{title:target.title,text:target.text.slice(0,1400)}:undefined,
       history:history.slice(-6),sources,minutes:remainingTime});
   }
-  function retryCoach(message:Message) {
-    if(!message.retry||activeCoachRequest.current)return;
+  function discuss(target:Discussion){
+    setDiscussion(target);
+    workspaceInput.current?.focus();
+  }
+  function submitMessage(forcePreparation=false){
+    if(busy||activeAssistantRequest.current)return;
+    const text=draft.trim();
+    const minutes=duration(text)||(/^\d{1,6}$/.test(text)?Number(text):0);
+    if(!forcePreparation&&!discussion&&mode==='last-minute'&&needsTime&&minutes>0&&minutes<=525600){
+      const adjusted={...context,minutes};
+      appendUser(text);
+      setContext(adjusted);
+      void generate(adjusted,'continue');
+      return;
+    }
+    if(!forcePreparation&&!discussion&&needsSubject&&text&&!text.includes('?')&&text.length<=100){
+      const adjusted={...context,subject:activeApi.parse(text).subject||text};
+      appendUser(text);
+      setContext(adjusted);
+      void generate(adjusted,'continue');
+      return;
+    }
+    const examRequest=/\bmy\s+(?:[\w-]+\s+){0,8}(?:exam|midterm)\b|\b(?:(?:study|revision) (?:plan|notes)|(?:help me|i (?:want|need) to) (?:study|revise))\b/i.test(text);
+    const summaryRequest=/\bsummari[sz]e\b/i.test(text)&&
+      (!messages.length||/\b(?:attached|syllabus|my notes|study material|past paper|pyq)\b/i.test(text));
+    const notes=!text.includes('?')&&text.split(/[.!\n]/).filter(line=>line.trim()).length>=2&&Boolean(revise(text,[],[],''));
+    const newMaterial=newAttachments&&(!text||notes||examRequest||summaryRequest);
+    const studyRequest=mode==='study'&&/^teach me\b/i.test(text)&&Boolean(studyTopic(text));
+    const preparation=newMaterial||examRequest||summaryRequest||studyRequest||(!workspaceResult&&notes)||(!text&&!workspaceResult&&(prompt||files.length));
+    if(!forcePreparation&&(discussion||!preparation)){
+      void send(text);
+      return;
+    }
+    if(!text&&!prompt&&!files.length){
+      workspaceInput.current?.focus();
+      return;
+    }
+    if(!text&&workspaceResult){
+      (mode==='study'?studyHeading:resultHeading).current?.scrollIntoView?.({block:'start'});
+      return;
+    }
+    const studyInput=text||prompt;
+    const adjusted=preparationContext(studyInput);
+    if(text||newAttachments)appendUser(text||files.map(file=>file.file.name).join(', '));
+    setDiscussion(null);
+    setPrompt(studyInput);
+    setContext(adjusted);
+    if(mode==='last-minute'||studySessionPrompt(studyInput)!==promptKey)setPlanGenerated(false);
+    void generate(adjusted,'normal',studyInput);
+  }
+  function retryAssistant(message:Message) {
+    if(!message.retry||busy||activeAssistantRequest.current)return;
     const pending:Message={role:message.role,text:'',pending:true};
     setMessages(current=>current.map(item=>item===message?pending:item));
-    void askCoach(pending,message.retry);
+    void askAssistant(pending,message.retry);
   }
   function open(next:Page|null, reference:Source|null=null){setPage(next);setSource(reference);dialog.current?.showModal();}
-  function reset(){clearBook();practiceRun.current?.abort();analyzed.current=null;setPreparedScope(null);setQuestionAnswers({});activeCoachRequest.current?.abort();activeCoachRequest.current=null;setCoachPending(false);setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNeedsSubject(false);setNotice('');setTimeReply('');setSubjectReply('');setPlanGenerated(false);}
-  function toggleExample(){setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);analyzed.current=null;setPreparedScope(null);setExampleMode(!exampleMode);editPrompt(exampleMode?'':sample);}
+  function reset(){
+    clearBook();practiceRun.current?.abort();analyzed.current=null;setPreparedScope(null);setQuestionAnswers({});
+    activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
+    setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);
+    setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setDraft('');setContext(empty);
+    setNeedsTime(false);setNeedsSubject(false);setNotice('');setPlanGenerated(false);setDiscussion(null);setNewAttachments(false);
+  }
+  function toggleExample(){
+    clearBook();setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);
+    analyzed.current=null;setPreparedScope(null);setExampleMode(!exampleMode);setPrompt('');setDraft(exampleMode?'':sample);
+    setNeedsTime(false);setNeedsSubject(false);setPlanGenerated(false);setDiscussion(null);
+  }
   function modifyFile(id:number,kind?:string) {
     clearBook();
     setFiles(current=>kind?current.map(file=>file.id===id?{...file,kind,kindOverride:true}:file):current.filter(file=>file.id!==id));
-    if(!kind)setDocuments(current=>current.filter(document=>document.id!==id));
+    if(!kind){
+      setDocuments(current=>current.filter(document=>document.id!==id));
+      if(files.length===1)setNewAttachments(false);
+    }
     setAwaitReview(false);setPlanGenerated(false);
   }
   function verifyPage(id:number,number:number,text:string){
@@ -539,19 +684,26 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     practiceRun.current=operation;
     setPracticePending(true);
     let generated:Record<number,string>={};
+    // The model returns the position in this request. The app keeps its own question IDs.
+    const slots=new Map(candidates.map((question,index)=>[index+1,question]));
+    const priorities=Array.from(slots,([id,{topic,prompt}])=>({id,topic,prompt}));
     try{
       const r=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
         signal:AbortSignal.any([operation.signal,AbortSignal.timeout(20000)]),
-        body:JSON.stringify({task:'practice',priorities:candidates.map(({id,topic,prompt})=>({id,topic,prompt}))})});
+        body:JSON.stringify({task:'practice',priorities})});
       const data=await r.json() as {questions?:{id:number;prompt:string}[]};
       if(r.ok&&Array.isArray(data.questions)&&!operation.signal.aborted){
-        const allowed=new Set(candidates.map(question=>question.id));
+        const existingIds=new Set(candidates.map(question=>question.id));
         const key=(value:string)=>value.trim().toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
-        const used=new Set(questions.filter(question=>!allowed.has(question.id)).map(question=>key(question.prompt)));
-        generated=Object.fromEntries(data.questions.flatMap(question=>{
-          if(!allowed.has(question.id)||typeof question.prompt!=='string'||used.has(key(question.prompt)))return [];
-          used.add(key(question.prompt));return [[question.id,question.prompt]];
-        }));
+        const used=new Set(questions.filter(question=>!existingIds.has(question.id)).map(question=>key(question.prompt)));
+        for(const question of data.questions){
+          const original=slots.get(question.id);
+          if(!original||generated[original.id]||typeof question.prompt!=='string')continue;
+          const normalized=key(question.prompt);
+          if(!normalized||used.has(normalized))continue;
+          used.add(normalized);
+          generated[original.id]=question.prompt;
+        }
       }
     }catch{/* The recall questions remain available when AI practice fails. */}
     finally{
@@ -609,6 +761,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <p>{kind}{q.examYears?.length?' · '+q.examYears.join(', '):''}{q.historicalFrequency?' · '+q.historicalFrequency+' recorded appearances'+(q.historicalPaperCount?' across '+q.historicalPaperCount+' papers':''):''}</p>
           <p>{q.topic}{q.unit?' · Unit '+q.unit:''}{q.marks?' · '+q.marks+' marks':''}</p>
           <p>{q.reason}</p>
+          <button type="button" className="link accent" onClick={()=>discuss({
+            title:q.topic,text:q.prompt+'\n'+(answer?.text??(sampleMode?q.answer:'')),sources:q.answerSource?[q.answerSource]:[]
+          })}>Ask about this question</button>
           {shortReview&&<p>Use this allocation to review the method. A full answer takes longer.</p>}
           {effort&&<p>Remaining estimate: {effort.remaining.understanding} min understanding, {effort.remaining.practice} min practice, {effort.remaining.recall} min recall.</p>}
           {Boolean(q.learning?.prerequisites.length)&&<p>Syllabus prerequisites: {q.learning?.prerequisites.join(', ')}.</p>}
@@ -634,37 +789,20 @@ export function App({api=demoApi}:{api?:ExamApi}) {
 
     </article>;
   }
-  function openWorkspace(coach:boolean){
-    const hash=coach?'#study-coach':'#main';
-    if(location.hash!==hash)history.pushState(null,'',hash);
-    setCoachPage(coach);
-    if(drawerOpen)drawerToggle.current?.focus();
-    setDrawerOpen(false);
-    setCoachPagePrompt(false);
-  }
   function selectMode(next:PreparationMode){
     if(next!==mode){
       if(next==='last-minute')timeAnchor.current=Date.now()-elapsed*60000;
       else if(planGenerated)setElapsed(Math.max(0,Math.floor((Date.now()-timeAnchor.current)/60000)));
-      setMode(next);setNotice('');setNeedsTime(false);setNeedsSubject(false);
+      setMode(next);setNotice('');setNeedsSubject(false);setDiscussion(null);
     }
-    openWorkspace(false);
+    if(drawerOpen)drawerToggle.current?.focus();
+    setDrawerOpen(false);
   }
   function openBookPage(index:number){
     setBookIndex(index);selectMode('study');
   }
-  function submitTime(minutes:number){
-    if(!Number.isSafeInteger(minutes)||minutes<=0||minutes>525600){setNotice('Enter study time in minutes or hours.');return;}
-    const adjusted={...context,minutes};
-    setContext(adjusted);
-    void generate(undefined,adjusted,'continue');
-  }
-  const hasContext=Boolean(prompt.trim() || files.length);
+  const hasContext=Boolean(prompt.trim()||files.length||context.subject);
   const workspaceResult=mode==='study'?Boolean(book&&activeBookPage):Boolean(result&&planGenerated);
-  const composerCollapsed=workspaceResult&&!editing&&!busy;
-  useEffect(()=>{
-    if(editing&&!coachPage)workspaceInput.current?.focus();
-  },[editing,coachPage]);
   const reviewDocuments=documents.filter(document=>!documentComplete(document));
   const reviewCount=reviewDocuments.reduce((sum,document)=>sum+Math.max(0,(document.total??0)-document.pages.filter(isTrusted).length),0);
   const allReviewPages=reviewCount>0&&reviewDocuments.every(document=>document.name.toLowerCase().endsWith('.pdf')&&document.total!==null);
@@ -679,8 +817,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </p>;
   }
   const modeButtons=(label:string)=><nav className="preparation-modes" aria-label={label}>
-    <button type="button" aria-pressed={mode==='last-minute'&&!coachPage} onClick={()=>selectMode('last-minute')}>Last Minute</button>
-    <button type="button" aria-pressed={mode==='study'&&!coachPage} onClick={()=>selectMode('study')}>Study</button>
+    <button type="button" disabled={busy} aria-pressed={mode==='last-minute'} onClick={()=>selectMode('last-minute')}>Last Minute</button>
+    <button type="button" disabled={busy} aria-pressed={mode==='study'} onClick={()=>selectMode('study')}>Study</button>
   </nav>;
   return <>
     <header className="top"><div className="wrap header-inner">
@@ -689,44 +827,61 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       <div className="header-tools"><ThemePicker {...theme}/>
         <button type="button" className="icon-btn" aria-label="Study information" onClick={()=>infoDialog.current?.showModal()}>ⓘ</button>
       </div>
-      <nav aria-label="Workspace"><a className="link" href={coachPage?'#main':'#study-coach'} onClick={event=>{
-        event.preventDefault();
-        openWorkspace(!coachPage);
-      }}>{coachPage?'Study workspace':'Study Coach'}</a></nav>
     </div></header>
     {drawerOpen&&<button type="button" className="drawer-backdrop" aria-label="Close study navigation" tabIndex={-1} onClick={()=>{setDrawerOpen(false);drawerToggle.current?.focus();}}/>}
     <aside ref={drawerPanel} id="study-drawer" className="study-drawer" hidden={!drawerOpen} aria-label="Study navigation">
       <div className="drawer-top"><strong>Study workspace</strong><button type="button" className="icon-btn" aria-label="Close navigation" onClick={()=>{setDrawerOpen(false);drawerToggle.current?.focus();}}><Icon name="close"/></button></div>
       {modeButtons('Preparation modes in navigation')}
-      {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}{context.minutes?' · '+context.minutes+' min':''}</p></div>}
+      {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}{mode==='last-minute'&&context.minutes?' · '+context.minutes+' min':''}</p></div>}
       {book&&<nav aria-label="Table of contents"><h2>Contents</h2><ol>
-        {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={mode==='study'&&!coachPage&&bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
+        {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={mode==='study'&&bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
           <span>{index+1}</span>{unit.title}</button></li>)}
       </ol></nav>}
-      <button type="button" className="link accent drawer-coach" onClick={()=>openWorkspace(true)}>Study Coach</button>
     </aside>
-    <main id="main" className={'wrap '+(coachPage?'coach-workspace':workspaceResult?'workspace':'landing')}>
-      {!coachPage&&<>
+    <main id="main" className={'wrap '+(workspaceResult?'workspace':'landing')}>
       {modeButtons('Preparation mode')}
-      {!workspaceResult&&<ThemeHero {...theme}/>}
+      <ThemeHero {...theme} headline={mode==='last-minute'?'lag gaye...🙂':'is baar to phod denge'}
+        description="pyq, syllabus, notes kuch bhi h to jldi bhej" compact={workspaceResult}/>
       <div className="exam-overview">
-        {(context.subject||book?.subject||context.minutes>0)&&<p className="summary">{[context.subject||book?.subject,context.minutes?context.minutes+' min available':''].filter(Boolean).join(' · ')}</p>}
+        {(context.subject||book?.subject||mode==='last-minute'&&context.minutes>0)&&<p className="summary">{[context.subject||book?.subject,mode==='last-minute'&&context.minutes?context.minutes+' min available':''].filter(Boolean).join(' · ')}</p>}
         {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
         {!busy&&!reviewDocuments.length&&warnings.some(warning=>warning.startsWith('OCR-only'))&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ OCR evidence needs review</button>}
-        {workspaceResult&&<details className="submitted-input">
-          <summary>Your input</summary>
-          {prompt.trim()&&<p>{prompt}</p>}
-          {files.length>0&&<ul>{files.map(file=><li key={file.id}>{file.file.name}</li>)}</ul>}
-        </details>}
       </div>
+      <section className="conversation" aria-label="Conversation" hidden={!messages.length}>
+        <div className="chat-area">
+          <div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0} onScroll={event=>{
+            const log=event.currentTarget;
+            followChat.current=log.scrollHeight-log.scrollTop-log.clientHeight<55;
+            setShowLatest(!followChat.current);
+          }}>
+            <div ref={chatTranscript}>
+              {messages.map((message,index)=><div className={'conversation-message '+(message.role==='You'?'message-user':'message-reply')} key={index}>
+                <span className="sr-only">{message.role}</span>
+                {message.pending?<small role="status">Thinking…</small>:message.error?
+                  <div className="coach-meta"><small role="alert">{message.error}</small>
+                    {message.retry&&<button type="button" className="link accent" disabled={assistantPending||busy} onClick={()=>retryAssistant(message)}>Retry</button>}</div>
+                  :message.role==='You'||message.status?<p>{message.text}</p>:<><CoachAnswer text={message.text}/>
+                    <SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/>
+                  </>}
+              </div>)}
+            </div>
+          </div>
+          {showLatest&&<button type="button" className="secondary jump-latest" onClick={scrollChatToLatest}>Latest ↓</button>}
+        </div>
+      </section>
       {mode==='last-minute' && result && planGenerated && <section className="results" aria-labelledby="results-title">
         <div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read</h2></div>
         {aiNote?<article className="study-note" aria-label="Revision notes">
           <CoachAnswer text={aiNote}/>
           <SourceStatus references={aiReferences} openSource={reference=>open(null,reference)}/>
+          <button className="link accent" type="button" onClick={()=>discuss({
+            title:revision?.title||context.subject||'Must Read',text:aiNote,
+            sources:aiReferences.filter(reference=>reference.kind==='uploaded')
+          })}>Ask about this summary</button>
         </article>:sampleMode&&revision&&<article className="study-note" aria-label="Revision notes">
           <h3>{revision.title}</h3>{revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
           <details><summary>Show answer</summary><p>{revision.answer}</p></details>
+          <button type="button" className="link accent" onClick={()=>discuss({title:revision.title,text:revision.answer,sources:revision.passages})}>Ask about this summary</button>
         </article>}
         {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
 
@@ -765,7 +920,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             {practicePending&&<p role="status">Preparing practice questions…</p>}
             {!practicePending&&!studyPageQuestions.length&&<p>No reliable practice questions are available for this page.</p>}
           </details>}
-          <button type="button" className="link accent" onClick={()=>{openWorkspace(true);setCoachPagePrompt(true);}}>Ask Study Coach about this page</button>
+          <button type="button" className="link accent" onClick={()=>discuss({
+            title:activeBookPage.title,text:activeBookContent.text,sources:activeBookPage.passages
+          })}>Ask about this page</button>
         </article>:<p role="status" className="book-page-feedback">Preparing this page…</p>}
         <nav className="book-pagination" aria-label="Study pages">
           <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>← Previous</button>
@@ -773,21 +930,29 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <button type="button" className="secondary" disabled={bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1)}>Next →</button>
         </nav>
       </section>}
-      <section aria-label="Exam setup" className={'setup '+(composerCollapsed?'setup-collapsed':'')}>
-        {composerCollapsed?<button type="button" className="secondary" onClick={()=>setEditing(true)}>Edit input</button>:<>
-        <form onSubmit={event=>{if(workspaceResult){event.preventDefault();setEditing(false);return;}void generate(event);}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
-          <label htmlFor="prompt">Paste notes or add a file</label>
-          <textarea ref={workspaceInput} id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="Paste a passage, or describe what you want to revise" rows={3} maxLength={8000}/>
+      <section ref={composer} aria-label="Message composer" className="setup unified-composer">
+        {discussion&&<div className="discussion-context"><span>Discussing {discussion.title}</span>
+          <button type="button" className="icon-btn" aria-label="Clear discussion context" onClick={()=>setDiscussion(null)}><Icon name="close"/></button>
+        </div>}
+        <form onSubmit={event=>{event.preventDefault();submitMessage();}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
+          <label htmlFor="prompt" className="sr-only">Ask a question or paste notes</label>
+          <textarea ref={workspaceInput} id="prompt" value={draft} onChange={event=>setDraft(event.target.value)}
+            onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();submitMessage();}}}
+            placeholder={needsTime&&mode==='last-minute'?'How many minutes can you study?':'Ask a question or paste notes…'} rows={2} maxLength={8000}/>
           {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
-            <button className="primary" disabled={busy} type="submit">{workspaceResult?(mode==='study'?'Open study page ↓':'Summary generated ↓'):mode==='study'?(busy?'Preparing your book…':'Start Study'):busy?'Generating summary…':'Generate Summary'}</button>
+            <div className="message-actions">
+              {!discussion&&(!workspaceResult||draft.trim())&&<button className="link accent" type="button" disabled={busy||assistantPending||!(draft.trim()||prompt||files.length)} onClick={()=>submitMessage(true)}>
+                {mode==='study'?'Start Study':'Generate Summary'}
+              </button>}
+              <button type="submit" className="primary icon-btn" aria-label="Send message" disabled={busy||assistantPending||!(draft.trim()||newAttachments)}><Icon name="send"/></button>
+            </div>
           </div>
         </form>
-        </>}
         {notice && <p role="alert" className="notice">{notice}</p>}
-        {!composerCollapsed&&hasContext && <details><summary>Edit details</summary><fieldset className="context" disabled={busy}><legend>Plan settings</legend>
+        {hasContext&&<details className="exam-settings"><summary>Edit details</summary><fieldset className="context" disabled={busy}><legend>Exam details</legend>
           <label>Exam<input value={context.subject} placeholder="Subject" onChange={e=>update('subject',e.target.value)}/></label>
           <label>Date<input value={context.date} placeholder="Exam date" onChange={e=>update('date',e.target.value)}/></label>
           {mode==='last-minute'&&<label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>{update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))));setPlanGenerated(false);}}/></label>}
@@ -795,59 +960,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <label>Paper rules<input value={context.pattern} placeholder="Optional" onChange={e=>update('pattern',e.target.value)}/></label>
           {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
         </fieldset></details>}
-        {mode==='last-minute'&&needsTime&&<section className="followup" aria-labelledby="time-question">
-          <h3 id="time-question">How much time do you have to prepare?</h3>
-          <div className="quick-times">{studyTimes.map(([minutes,label])=><button type="button" className="secondary" key={minutes} onClick={()=>submitTime(minutes)}>{label}</button>)}
-            <button type="button" className="secondary" onClick={()=>setCustomTime(true)}>Custom</button></div>
-          {customTime&&<form className="inline" onSubmit={event=>{event.preventDefault();submitTime(duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0));}}>
-            <label htmlFor="time" className="sr-only">Custom study time</label>
-            <input autoFocus id="time" value={timeReply} onChange={event=>setTimeReply(event.target.value)} placeholder="e.g. 45 minutes"/>
-            <button className="primary">Continue</button>
-          </form>}
-        </section>}
-        {needsSubject&&<form className="followup" onSubmit={event=>{event.preventDefault();if(!subjectReply.trim())return;const adjusted={...context,subject:subjectReply.trim()};setContext(adjusted);void generate(undefined,adjusted,documents.length?'continue':'normal');}}>
-          <label htmlFor="summary-subject">What subject should I summarize?</label>
-          <div className="inline"><input id="summary-subject" value={subjectReply} maxLength={100} onChange={event=>setSubjectReply(event.target.value)}/><button className="primary" disabled={!subjectReply.trim()}>Continue</button></div>
-        </form>}
         {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading sample questions…':processingMessage}</p>
           {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
         </div>}
-        {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(undefined,context,'retry')}>Retry unread files</button>}
+        {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(context,'retry')}>Retry unread files</button>}
       </section>
-      </>}
-      {coachPage&&<section ref={coachSection} id="study-coach" className="coach" aria-labelledby="study-coach-title">
-        <header><h1 id="study-coach-title">Study Coach</h1>
-          {coachPagePrompt&&activeBookPage&&<p className="coach-page-topic">{activeBookPage.title}</p>}
-        </header>
-        <div className="chat-area">
-          <div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0} onScroll={event=>{
-            const log=event.currentTarget;
-            followChat.current=log.scrollHeight-log.scrollTop-log.clientHeight<60;
-            setShowLatest(!followChat.current);
-          }}>
-            <div ref={chatTranscript}>
-            {Array.from({length:Math.ceil(messages.length/2)},(_,index)=>index*2).map(index=>
-              <div className="coach-turn" key={index}>{messages.slice(index,index+2).map(message=>
-                <div className={'coach-message '+(message.role==='You'?'coach-user':'coach-reply')} key={message.role}>
-                  <span className="sr-only">{message.role}</span>
-                  {message.pending?<small role="status">Thinking…</small>:message.error?
-                    <div className="coach-meta"><small role="alert">{message.error}</small>
-                      <button type="button" className="link accent" disabled={coachPending} onClick={()=>retryCoach(message)}>Retry</button></div>
-                    :message.role==='You'?<p>{message.text}</p>:<><CoachAnswer text={message.text}/>
-                      <SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/>
-                    </>}
-                </div>)}</div>)}
-            </div>
-          </div>
-          {showLatest&&<button type="button" className="secondary jump-latest" onClick={scrollChatToLatest}>Latest ↓</button>}
-        </div>
-        <form className="inline coach-composer" onSubmit={event=>{event.preventDefault();send(chat);}}>
-          <input aria-label="Ask about your plan" placeholder="Ask a question…" maxLength={500} value={chat} onChange={event=>setChat(event.target.value)}/>
-          <button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button>
-        </form>
-      </section>}
     </main>
-    {!coachPage&&<footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>}
     <dialog ref={infoDialog} aria-labelledby="study-info-title" onClick={event=>{if(event.target===event.currentTarget)event.currentTarget.close();}}>
       <div className="dialog-content info-content">
         <div className="info-heading"><h2 id="study-info-title">Study information</h2>
@@ -868,8 +986,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           {(mode==='study'?activeBookContent?.webLimited:summaryWebLimited)&&<p>Web sources were unavailable for this result.</p>}
         </section>}
         {!sampleMode&&activeApi.prepare&&documents.length>0&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
-        {!coachPage&&<button className="link accent" type="button" disabled={busy} onClick={()=>{infoDialog.current?.close();toggleExample();}}>{exampleMode?'Exit demo':'Try an example'}</button>}
+        <button className="link accent" type="button" disabled={busy||assistantPending} onClick={()=>{infoDialog.current?.close();toggleExample();}}>{exampleMode?'Exit demo':'Try an example'}</button>
         {sampleMode?<p>Demo · Sample DBMS data</p>:<p>Original files stay on this device. Extracted text is sent for analysis.</p>}
+        <nav className="product-links" aria-label="Product information">
+          <button className="link" onClick={()=>open('pricing')}>Plans</button>
+          <button className="link" onClick={()=>open('privacy')}>Privacy</button>
+          <button className="link" onClick={()=>open('terms')}>Terms</button>
+        </nav>
       </div>
     </dialog>
     <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>
