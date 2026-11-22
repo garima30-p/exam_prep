@@ -9,3 +9,4 @@ export function findGutter(image:{data:Uint8ClampedArray;width:number;height:num
 export function scanScale(width:number,height:number,pixelBudget?:number):number;
 export function scanPasses(width:number,height:number,manual?:boolean):{rotation:number;filter:'raw'|'contrast'|'binary';layout:'auto'|'column'}[];
 export function enhanceScan<T extends {data:Uint8ClampedArray}>(image:T,binary?:boolean):T;
+export function readQuestionCue(line:string,pastPaper?:boolean):{number?:string;text:string}|null;

@@ -13,6 +13,8 @@ import { acceptedDocuments, documentFormat, documentLocation, originalDocumentLi
 import { StudyCharacter, ThemeHero, ThemePicker, useTheme } from './themes';
 import { answerLines, buildStudyPack, familiarityLabels, sourceLabel } from './study-pack';
 import { DownloadStudyPack, StudyOutput } from './study-output';
+import { revise, revisionFromAnswer } from './revision';
+import type { Revision } from './revision';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
@@ -50,6 +52,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [awaitReview,setAwaitReview]=useState(false);
   const controller=useRef<AbortController|null>(null);
   const [planGenerated,setPlanGenerated]=useState(false);
+  const [revision,setRevision]=useState<Revision|null>(null);
+  const [editing,setEditing]=useState(false);
+  const resultHeading=useRef<HTMLHeadingElement>(null);
+  useEffect(()=>{if(planGenerated&&!editing){resultHeading.current?.focus();resultHeading.current?.scrollIntoView?.({block:'start'});}},[planGenerated,editing]);
   const [dragging,setDragging]=useState(false);
   const [result,setResult]=useState<readonly Question[]|null>(null);
   const [warnings,setWarnings]=useState<string[]>([]);
@@ -101,7 +107,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     event?.preventDefault();
     if(controller.current) return;
     if(!prompt.trim() && !files.length) {setNotice('Describe your exam or attach a file to begin.');return;}
-    if(!adjusted.minutes){setNeedsTime(true);return;}
+    if(!adjusted.minutes&&/\b(?:timed plan|(?:make|build|create|give me) (?:a |my )?(?:study|revision|preparation) plan)\b/i.test(prompt.split(/summari[sz]e (?:my |these |the )?notes:/i)[0])){setNeedsTime(true);return;}
     setNeedsTime(false);setNotice('');setBusy(true);
     const run=new AbortController();
     controller.current=run;
@@ -112,7 +118,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         records=await activeApi.prepare(files,{records,signal:run.signal,retry:mode==='retry',
           onUpdate:({documents:updated,message})=>{setDocuments(updated);setProcessingMessage(message);}});
         setDocuments(records);
-        if(records.some(document=>!documentComplete(document))){
+        if(records.some(document=>!documentComplete(document)) && !revise(prompt,records,files,adjusted.subject) && !records.some(document=>document.pages.some(page=>page.text.trim()&&(page.status==='extracted'||page.status==='verified')))){
+          setNotice('No readable material was found. Check the original or retry the attachment.');
           setAwaitReview(true);
           return;
         }
@@ -120,8 +127,23 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       run.signal.throwIfAborted();
       setAwaitReview(false);
       setProcessingMessage('Building your plan…');
-      const analysis=await activeApi.analyze(adjusted, files, prompt,{documents:records,signal:run.signal,
-        onPlanning:()=>setProcessingMessage('Matching equivalent questions and building your plan…')});
+      const extracted=sampleMode?null:revise(prompt,records,files,adjusted.subject);
+      let analysis:Analysis;
+      try {
+        analysis=await activeApi.analyze(adjusted, files, prompt,{documents:records,signal:run.signal,
+          onPlanning:()=>setProcessingMessage('Matching equivalent questions and building your plan…')});
+      } catch(error) {
+        run.signal.throwIfAborted();
+        if(!extracted)throw error;
+        analysis={questions:[],warnings:['Question ranking is temporarily unavailable.']};
+      }
+      const summary=extracted??revisionFromAnswer(analysis.questions.find(question=>question.answerSource))
+        ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
+      if(!summary&&!analysis.questions.length){
+        setNotice('No study content could be read. Paste a readable passage or replace the attachment.');
+        return;
+      }
+      setRevision(summary);setEditing(false);
       run.signal.throwIfAborted();
       setResult(analysis.questions);setWarnings(analysis.warnings);setGeneratedCoach(Boolean(analysis.generatedCoach));
       setOptimization(analysis.optimization?{data:analysis.optimization,context:adjusted}:null);
@@ -140,7 +162,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const fitted=plan&&optimization
     ? plan.selectedQuestionIds.map(id=>optimization.data.candidates.find(question=>question.id===id)!)
     : fitQuestions(result ?? [],context.minutes);
-  const visible=fitted.slice(0,limit);
+  const visible=(remainingTime||context.minutes?fitted:result??[]).slice(0,limit);
   const plannedIds=new Set(fitted.map(question=>question.id));
   const tracked=optimization?.data.candidates.filter(question=>!plannedIds.has(question.id)&&progress[question.id])??[];
   const coveredUnits=[...new Set(visible.map(question=>question.unit).filter(Boolean))].sort((a,b)=>a-b);
@@ -148,6 +170,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const coverageMessage = missingUnits.length ? 'Units outside the current shortlist: '+missingUnits.join(', ')+'.' : '';
   const pack = buildStudyPack(context,remainingTime,plan,fitted,visible,optimization?.data.candidates??result??[],
     sampleMode,[...warnings,...(plan?.warnings??[]),coverageMessage].filter(Boolean));
+  const readMinutes=revision&&remainingTime?Math.min(remainingTime,Math.max(1,Math.ceil(revision.passages.length/2))):0;
+  if(revision){
+    pack.revision=revision;
+    if(readMinutes&&!pack.timeline.length)pack.timeline.push({title:revision.title+' · Read and recall',minutes:readMinutes});
+  }
+  const nextAction=pack.timeline[0];
   function send(text:string, target?:Question, marks?:number) {
     if(!text.trim())return;
     const minutes=duration(text);
@@ -266,7 +294,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </article>;
   }
   const hasContext=Boolean(prompt.trim() || files.length);
-  const hasUnreadPages=documents.some(document=>!documentComplete(document));
   return <>
     <header className="top"><div className="wrap header-inner">
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
@@ -274,60 +301,61 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </div></header>
     <main id="main" className={'wrap '+(planGenerated?'workspace':'landing')}>
       <ThemeHero {...theme}/>
-      <section aria-label="Exam setup" className="setup">
+      {planGenerated&&!editing?<button className="secondary" onClick={()=>setEditing(true)}>Edit input</button>:<section aria-label="Exam setup" className="setup">
         <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
-          <label htmlFor="prompt">Exam details</label>
-          <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="e.g. DBMS exam tomorrow, 5 hours to study" rows={3} maxLength={8000}/>
+          <label htmlFor="prompt">Paste notes or add a file</label>
+          <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="Paste a passage, or describe what you want to revise" rows={3} maxLength={8000}/>
           {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
-            {planGenerated
-              ? <a className="primary" href="#results-title">Plan generated<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v15m-6-6 6 6 6-6"/></svg></a>
-              : <button className="primary" disabled={busy} type="submit">{busy?'Preparing plan…':'Generate plan'}</button>}
+            <button className="primary" disabled={busy} type="submit">{busy?'Summarizing…':'Summarize'}</button>
           </div>
         </form>
         {notice && <p role="alert" className="notice">{notice}</p>}
-        {hasContext && <fieldset className="context" disabled={busy}><legend>Plan settings</legend>
+        {hasContext && <details><summary>Edit details</summary><fieldset className="context" disabled={busy}><legend>Plan settings</legend>
           <label>Exam<input value={context.subject} placeholder="Subject" onChange={e=>update('subject',e.target.value)}/></label>
           <label>Date<input value={context.date} placeholder="Exam date" onChange={e=>update('date',e.target.value)}/></label>
           <label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))))}/></label>
           <label>Pass mark<input value={context.pass} placeholder="Optional" onChange={e=>update('pass',e.target.value)}/></label>
           <label>Paper rules<input value={context.pattern} placeholder="Optional" onChange={e=>update('pattern',e.target.value)}/></label>
           {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
-        </fieldset>}
-        {needsTime && <form className="followup" onSubmit={e=>{e.preventDefault();const minutes=duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0);if(!minutes||!Number.isSafeInteger(minutes)){setNotice('Enter study time in minutes or hours.');return;} const adjusted={...context,minutes};setContext(adjusted);void generate(undefined,adjusted);}}><label htmlFor="time">How much time do you have to study?</label><div className="inline"><input autoFocus id="time" value={timeReply} onChange={e=>setTimeReply(e.target.value)} placeholder="e.g. 2 hours"/><button className="primary">Continue</button></div></form>}
+        </fieldset></details>}
+        {needsTime && <form className="followup" onSubmit={e=>{e.preventDefault();const minutes=duration(timeReply)||(/^\d+$/.test(timeReply.trim())?Number(timeReply):0);if(!minutes||!Number.isSafeInteger(minutes)){setNotice('Enter study time in minutes or hours.');return;} const adjusted={...context,minutes};setContext(adjusted);void generate(undefined,adjusted);}}><label htmlFor="time">How many minutes can you study?</label><div className="inline"><input autoFocus id="time" value={timeReply} onChange={e=>setTimeReply(e.target.value)} placeholder="e.g. 2 hours"/><button className="primary">Continue</button></div></form>}
         <div className="setup-meta"><button className="link accent" type="button" disabled={busy} onClick={toggleExample}>{exampleMode?'Exit demo':'Try an example'}</button>{sampleMode?<small>Demo · Sample DBMS data</small>:hasContext&&<small>Original files stay on device. Text is sent for analysis.</small>}</div>
         {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading sample questions…':processingMessage}</p>
           {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
         </div>}
         {!sampleMode&&activeApi.prepare&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
-        {!busy&&!sampleMode&&(awaitReview||hasUnreadPages)&&<div className="coverage">
-          {hasUnreadPages
-            ? <><p>Some pages need review. Continuing uses only usable text. Incomplete past papers are excluded from frequency counts.</p>
-              <div className="processing-status"><button className="secondary" type="button" onClick={()=>void generate(undefined,context,'retry')}>Retry unread pages</button>{awaitReview&&<button className="primary" type="button" onClick={()=>void generate(undefined,context,'continue')}>Continue with incomplete evidence</button>}</div></>
-            : <button className="primary" type="button" onClick={()=>void generate(undefined,context,'continue')}>Build verified plan</button>}
-        </div>}
-      </section>
+        {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(undefined,context,'retry')}>Retry unread files</button>}
+      </section>}
       {result && planGenerated && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" tabIndex={-1}>{sampleMode?'Sample study plan':'Study plan'}</h2></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
+        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>{revision?.title??'Past-paper questions'}</h2></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
         <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
+        {revision?<article className="study-note" aria-label="Revision summary">
+          {revision.passages.map((source,index)=><p key={index}>{source.excerpt}{' '}<button className="link accent" onClick={()=>open(null,source)}>{sourceLabel(source)}</button></p>)}
+          <p><strong>Recall:</strong> {revision.recall}</p>
+          <details key={revision.answer}><summary>Show answer</summary><p>{revision.answer}</p></details>
+        </article>:<article className="study-note"><p>These are questions found in the material. They show what was asked, but no supporting answer was found.</p>
+          {result.slice(0,3).map(question=><div key={question.id}><p>{question.prompt}</p><button className="link accent" onClick={()=>open(null,question.source)}>{sourceLabel(question.source)}</button></div>)}
+        </article>}
+        {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
+        <details className="study-output" open={sampleMode||undefined}><summary>More study tools</summary>
         <StudyOutput pack={pack} openSource={reference=>open(null,reference)} ask={question=>{
           send('Explain '+question.topic,question);
           document.getElementById('study-coach-title')?.scrollIntoView?.({block:'nearest'});
         }}/>
         <div className="result-grid"><section aria-labelledby="important-questions">
-          <h3 id="important-questions">Important Questions</h3>
-          {!visible.length&&<p className="notice">No complete question fits this plan.</p>}
+          {(visible.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
+
           {visible.map((question,index)=>renderQuestion(question,index))}
           {limit<fitted.length && <button className="secondary" onClick={()=>send('Show next 10')}>Show next 10</button>}
           {tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
         </section><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3><div className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:messages.map((m,i)=><div key={i}><strong>{m.role}</strong><p>{m.text}</p>{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div><form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()}><Icon name="send"/></button></form></aside></div>
-          <div className="coverage"><h3>Sources and Coverage</h3>
-            {!result.length?<p>No usable questions were identified. Try a text-selectable past paper or paste the question lines directly.</p>:!visible.length?<p>{plan?.preparedQuestionIds.length===result.length?'All candidate checkpoints are marked completed. Revisit a question below whenever needed.':'No additional question fits the remaining preparation budget.'}</p>:<p>{coveredUnits.length?'Identified units: '+coveredUnits.join(', ')+'. ':''}Check compulsory sections and passing-mark coverage against your paper.</p>}
-            {missingUnits.length>0&&<p>Units in the material missing from this shortlist: {missingUnits.join(', ')}.</p>}
-            {pack.warnings.length>0&&<ul className="notice">{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>}
-          </div>
+          {result.length>0&&pack.warnings.length>0&&<div className="coverage"><h3>Sources and Coverage</h3>
+            <ul className="notice">{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>
+          </div>}
+        </details>
       </section>}
     </main>
     <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>

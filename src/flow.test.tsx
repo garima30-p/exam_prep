@@ -7,6 +7,32 @@ import { demoApi, fixture } from './api';
 import type { ExamApi, RankedQuestion } from './api';
 import { makeLearningPlan } from '../server/learning.mjs';
 
+it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary with budget prefix %j',async(prefix)=>{
+  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
+  const host=document.createElement('div');
+  document.body.append(host);
+  const root=createRoot(host);
+  const api:ExamApi={...demoApi,analyze:async()=>({questions:[],warnings:[]})};
+  try{
+    await act(async()=>root.render(<App api={api}/>));
+    await act(async()=>{
+      const prompt=host.querySelector('textarea')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(prompt,
+        'My Operating Systems exam is tomorrow. '+prefix+'Summarize my notes: FIFO evicts the page that arrived earliest. LRU evicts the page whose most recent access was furthest in the past. A hit updates recency in LRU.');
+      prompt.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+    await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    expect(document.activeElement?.textContent).toBe('FIFO vs. LRU');
+    expect(host.querySelector('[aria-label="Revision summary"]')?.textContent).toContain('A hit updates recency in LRU.');
+    expect(host.querySelector('[aria-label="Revision summary"] details')?.textContent).toContain('Show answer');
+    expect(host.querySelector('.composer')).toBeNull();
+    expect(host.textContent?.includes('Start here:')).toBe(Boolean(prefix));
+  }finally{
+    await act(async()=>root.unmount());
+    host.remove();
+  }
+});
+
 it('asks for study time, then shows a plan and answers a contextual question', async ()=>{
   Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
   const host=document.createElement('div');
@@ -19,18 +45,18 @@ it('asks for study time, then shows a plan and answers a contextual question', a
   };
   try {
     await act(async()=>root.render(<App/>));
-    await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow.'));
+    await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. Make a study plan.'));
     const picker=host.querySelector<HTMLInputElement>('input[type=file]')!;
     Object.defineProperty(picker,'files',{value:[new File(['fixture'],'DBMS_PYQ.pdf',{type:'application/pdf'})]});
     await act(async()=>picker.dispatchEvent(new Event('change',{bubbles:true})));
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Type for DBMS_PYQ.pdf"]')?.value).toBe('Past paper');
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    expect(host.textContent).toContain('How much time do you have to study?');
+    expect(host.textContent).toContain('How many minutes can you study?');
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('#time')!,'5 hours'));
     await act(async()=>host.querySelector('#time')!.closest('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     await act(async()=>{await new Promise(resolve=>setTimeout(resolve,460));});
     expect(host.querySelectorAll('.question')).toHaveLength(10);
-    expect(host.querySelector('.composer-actions a[href="#results-title"]')?.textContent).toBe('Plan generated');
+    expect(document.activeElement?.id).toBe('results-title');
     expect(host.querySelector('.composer button[type=submit]')).toBeNull();
     await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Ask why?')!.click());
     expect(host.querySelector('[role=log]')?.textContent).toContain('page 1, Q1');
@@ -40,10 +66,10 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(host.querySelectorAll('.question').length).toBeGreaterThan(0);
     const allocations=[...host.querySelectorAll('.study-timeline strong')].map(item=>parseInt(item.textContent??'0',10));
     expect(allocations.reduce((sum,item)=>sum+item,0)).toBeLessThanOrEqual(30);
-    expect(host.querySelector('a[href="#results-title"]')).not.toBeNull();
+    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Edit input')!.click());
     await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. I have two hours.'));
-    expect(host.querySelector('a[href="#results-title"]')).toBeNull();
-    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Generate plan');
+    expect(host.querySelector('#results-title')).toBeNull();
+    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Summarize');
   } finally {
     await act(async()=>root.unmount());
     host.remove();

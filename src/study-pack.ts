@@ -1,6 +1,7 @@
 import { documentFormat, documentLocation } from './document-formats';
 import type { Context, Question, Source } from './api';
 import type { LearningPlan } from '../server/learning.mjs';
+import type { Revision } from './revision';
 
 export const familiarityLabels = {
   unknown:'Unspecified', scratch:'Starting from scratch', familiar:'Somewhat familiar', revising:'Mostly revising',
@@ -15,6 +16,7 @@ export type StudyNote = {
   readOnly: boolean;
 };
 export type StudyPack = {
+  revision?:Revision;
   subject: string;
   context: string[];
   notes: StudyNote[];
@@ -61,7 +63,7 @@ export function buildStudyPack(context: Context, minutes: number, plan: Learning
     const effort = plan?.efforts[question.id];
     const allocation = effort?.minutes ?? question.minutes;
     if (notes.length < 8 && (effort?.remaining.understanding ?? allocation) > 0) {
-      addNote(question, effort?.remaining.understanding ?? allocation, false);
+      addNote(question, allocation, false);
     }
     timeline.push({ title:question.topic, minutes:allocation });
   }
@@ -77,7 +79,7 @@ export function buildStudyPack(context: Context, minutes: number, plan: Learning
   if (recall > 0) timeline.push({ title:'Active recall', minutes:recall });
   return {
     subject:context.subject,
-    context:[context.subject, minutes+' min available', context.familiarity==='unknown'?'':familiarityLabels[context.familiarity],
+    context:[context.subject, context.minutes?minutes+' min available':'', context.familiarity==='unknown'?'':familiarityLabels[context.familiarity],
       context.pass?'Passing target '+context.pass:''].filter(Boolean),
     notes, timeline,
     questions:visible.map((question,index)=>({question,rank:index+1,
@@ -95,7 +97,16 @@ export function exportBlocks(pack: StudyPack, section: Section): ExportBlock[] {
   add(3, pack.context.join(' · '));
   if (section === 'all' || section === 'notes') {
     add(1, 'Must Read Now');
-    if (!pack.notes.length) add(3, noNotes);
+    if(pack.revision){
+      add(2,pack.revision.title);
+      for(const passage of pack.revision.passages){
+        add(3,passage.excerpt);
+        add(3,'Source: '+sourceLabel(passage));
+      }
+      add(3,'Recall: '+pack.revision.recall);
+      add(3,pack.revision.answer);
+    }
+    if (!pack.notes.length&&!pack.revision) add(3, noNotes);
     for (const note of pack.notes) {
       add(2, note.priority + '. ' + note.question.topic + ' · ' + note.minutes + ' min' + (note.readOnly ? ' (read only)' : ''));
       note.paragraphs.forEach(text=>add(3,text));
