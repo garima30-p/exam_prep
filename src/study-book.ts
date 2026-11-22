@@ -1,4 +1,5 @@
 import type { Analysis, Question, RankedQuestion, Source } from './api';
+import { duration } from './api';
 import { makePlan } from '../server/optimizer.mjs';
 
 export type BookPage = {
@@ -56,4 +57,9 @@ export function bookOutline(analysis: Analysis, fallbackTopics: readonly string[
     const sources=[...page.questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),...relevant];
     return {...page,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
   });
+}
+
+export function studySessionPrompt(prompt:string) {
+  return prompt.replace(/\b(?:i (?:only )?have|only have|i can study for|replan for)\s+(?:(?:only|just)\s+)?(?:\d+(?:\.\d+)?|[a-z]+(?:[- ][a-z]+)?)\s*(?:minutes?|mins?|hours?|hrs?|days?)\b(?:\s+to (?:study|prepare))?[,.!?;]*/gi,
+    clause=>duration(clause)>0?'':clause).replace(/\s+/g,' ').trim();
 }

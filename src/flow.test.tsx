@@ -210,6 +210,14 @@ it('generates study pages on demand and keeps page position and analysis across 
     await click('Study',modes);
     expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
     expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
+    await act(async()=>{const input=host.querySelector('textarea')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Help me study DBMS I have 15 minutes.');
+      input.dispatchEvent(new Event('input',{bubbles:true}));});
+    expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
+    await click('Last Minute',modes);
+    await act(async()=>submit());
+    expect(host.querySelector('.summary')?.textContent).toContain('15 min available');
+    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
     expect(api.analyze).toHaveBeenCalledTimes(1);
   }finally{
     await act(async()=>root.unmount());

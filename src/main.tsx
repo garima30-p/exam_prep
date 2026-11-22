@@ -17,7 +17,7 @@ import { revise, revisionFromAnswer } from './revision';
 import type { Revision } from './revision';
 import { inspectStudyInput } from './study-input';
 import { prepareScope } from './preparation-scope';
-import { bookOutline, studyTopic } from './study-book';
+import { bookOutline, studySessionPrompt, studyTopic } from './study-book';
 import type { BookPage } from './study-book';
 import type { PreparationScope } from './preparation-scope';
 import './style.css';
@@ -81,15 +81,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const drawerToggle=useRef<HTMLButtonElement>(null);
   const drawerPanel=useRef<HTMLElement>(null);
   const [customTime,setCustomTime]=useState(false);
-  const [book,setBook]=useState<{subject:string;pages:BookPage[];demo:boolean}|null>(null);
+  const [savedBook,setBook]=useState<{subject:string;pages:BookPage[];demo:boolean;promptKey:string}|null>(null);
   const [bookIndex,setBookIndex]=useState(0);
   const [bookContent,setBookContent]=useState<Record<string,BookContent>>({});
   const [bookErrors,setBookErrors]=useState<Record<string,string>>({});
   const [loadingPage,setLoadingPage]=useState<string|null>(null);
   const bookRequest=useRef<AbortController|null>(null);
   const studyHeading=useRef<HTMLHeadingElement>(null);
-  const activeBookPage=book?.pages[bookIndex];
   const [prompt,setPrompt]=useState('');
+  const promptKey=studySessionPrompt(prompt);
+  const book=savedBook?.promptKey===promptKey?savedBook:null;
+  const activeBookPage=book?.pages[bookIndex];
   const [context,setContext]=useState(empty);
   const [files,setFiles]=useState<Material[]>([]);
   const [notice,setNotice]=useState('');
@@ -215,7 +217,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(accepted.length){clearBook();setPlanGenerated(false);setAwaitReview(false);}
     setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 files of 20 MB each. Use PDF, DOCX, PPTX, PNG, JPEG, WebP, or BMP. Save older .ppt files as .pptx.' : '');
   };
-  const editPrompt=(value:string)=>{clearBook();setPrompt(value);const parsed=activeApi.parse(value);setContext(current=>({...parsed,minutes:parsed.minutes||current.minutes}));setNeedsTime(false);setNeedsSubject(false);setPlanGenerated(false);};
+  const editPrompt=(value:string)=>{setPrompt(value);const parsed=activeApi.parse(value);setContext(current=>({...parsed,minutes:parsed.minutes||current.minutes}));setNeedsTime(false);setNeedsSubject(false);setPlanGenerated(false);};
   const restartBudget=()=>{timeAnchor.current=Date.now();setElapsed(0);};
   const update=<K extends keyof Context,>(key:K,value:Context[K])=>{
     if(key==='minutes')restartBudget();
@@ -258,7 +260,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
       const requestedTopic=studying?studyTopic(prompt):'';
       const extracted=sampleMode?null:revise(requestedTopic?'':prompt,records,classified,adjusted.subject);
-      const analysisKey=JSON.stringify([prompt,classified.map(file=>[file.id,file.kind]),records]);
+      const analysisKey=JSON.stringify([promptKey,classified.map(file=>[file.id,file.kind]),records]);
       const cached=!sampleMode&&analyzed.current?.key===analysisKey?analyzed.current.analysis:null;
       const runProgress=cached?progress:{};
       let analysis:Analysis;
@@ -279,7 +281,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         const pages=bookOutline(analysis,fallback,extracted?.passages??[]);
         if(!pages.length){setNeedsSubject(true);return;}
         clearBook();
-        setBook({subject:adjusted.subject||requestedTopic,pages,demo:sampleMode});
+        setBook({subject:adjusted.subject||requestedTopic,pages,demo:sampleMode,promptKey});
         setResult(analysis.questions);setWarnings(analysis.warnings);
         setOptimization(analysis.optimization?{data:analysis.optimization}:null);
         setProgress(runProgress);
