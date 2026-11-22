@@ -127,6 +127,18 @@ h3{font-size:1.12rem;font-weight:750;margin:.5rem 0 .3rem}
 .coach h3{margin-top:0}
 .messages{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:.8rem;padding:.4rem 0 .8rem;margin-bottom:.5rem}
 .messages p{white-space:pre-wrap;overflow-wrap:anywhere}
+#study-coach .coach{position:static}
+#study-coach .messages{max-height:min(66dvh,48rem);margin:1rem 0 0;padding:0 .2rem .5rem}
+.coach-turn{display:grid;gap:.8rem;padding:.8rem 0;border-bottom:1px solid var(--line)}
+.coach-message{min-width:0;overflow-wrap:anywhere}
+.coach-message small,.coach-message summary{font-size:.8rem;color:var(--muted)}
+.coach-message summary{cursor:pointer;width:max-content}
+.coach-meta{display:flex;align-items:baseline;gap:.6rem}
+.coach-answer ul,.coach-answer ol{padding-inline-start:1.5rem;margin:.4rem 0}
+.coach-answer ul{list-style:disc}
+.coach-answer ol{list-style:decimal}
+.coach-answer pre{overflow:auto;padding:.5rem;border:1px solid var(--line);border-radius:.4rem}
+.coach-answer p+p{margin-top:.5rem}
 dialog{width:min(520px,calc(100% - 2rem));max-height:calc(100% - 2rem);margin:auto;border:1px solid var(--line);border-radius:16px;background:var(--surface);color:inherit;padding:0}
 dialog::backdrop{background:var(--backdrop)}
 .dialog-content{padding:1.2rem}

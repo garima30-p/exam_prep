@@ -22,7 +22,10 @@ const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiari
 const preparationLabels={completed:'Checkpoints completed',revision:'Needs revision','in-progress':'In progress','not-started':'Not started'};
 type Page = 'pricing'|'privacy'|'terms';
 type CoachSource = (Source & {kind:'uploaded';id:string}) | {kind:'web';id:string;title:string;url:string};
-type Message = {role:'You'|'Demo coach'|'Study coach'; text:string; source?:Source; references?:CoachSource[]; generated?:boolean};
+type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subject:string;topics:string[];
+  history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
+type Message = {role:'You'|'Demo coach'|'in-nocent';text:string;references?:CoachSource[];
+  generated?:boolean;pending?:boolean;error?:string;retry?:CoachRequest};
 
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
   const paths = {
@@ -33,6 +36,28 @@ function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
     close:'M5 5l14 14M19 5L5 19'
   };
   return <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]}/></svg>;
+}
+
+function coachInline(text:string) {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part,index)=>{
+    if(part.startsWith('`')&&part.endsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;
+    if(part.startsWith('**')&&part.endsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;
+    return part;
+  });
+}
+function CoachAnswer({text}:{text:string}) {
+  return <div className="coach-answer">{text.split(/(```[\s\S]*?```)/).flatMap((part,index)=>{
+    if(part.startsWith('```')&&part.endsWith('```'))return <pre key={index}><code>{part.slice(3,-3).replace(/^[-\w]*\r?\n/,'').trimEnd()}</code></pre>;
+    return part.trim().split(/\n\s*\n/).filter(Boolean).map((block,blockIndex)=>{
+      const key=index+'-'+blockIndex;
+      const lines=block.split('\n');
+      if(lines.every(line=>/^\s*[-*]\s+/.test(line)))return <ul key={key}>{lines.map((line,i)=>
+        <li key={i}>{coachInline(line.replace(/^\s*[-*]\s+/,''))}</li>)}</ul>;
+      if(lines.every(line=>/^\s*\d+[.)]\s+/.test(line)))return <ol key={key}>{lines.map((line,i)=>
+        <li key={i}>{coachInline(line.replace(/^\s*\d+[.)]\s+/,''))}</li>)}</ol>;
+      return <p key={key}>{coachInline(block)}</p>;
+    });
+  })}</div>;
 }
 
 export function App({api=demoApi}:{api?:ExamApi}) {
@@ -73,13 +98,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const chatLog=useRef<HTMLDivElement>(null);
   useEffect(()=>{if(chatLog.current)chatLog.current.scrollTop=0;},[messages]);
   const [chat,setChat]=useState('');
-  const [generatedCoach,setGeneratedCoach]=useState(false);
-  const [coachUnavailable,setCoachUnavailable]=useState('AI generation is temporarily unavailable.');
-  useEffect(()=>{if(api===demoApi)return;const request=new AbortController();void fetch('/api/coach/status',{signal:request.signal}).then(response=>response.json()).then(data=>{setGeneratedCoach(data.available===true);if(typeof data.message==='string')setCoachUnavailable(data.message);}).catch(()=>{});return ()=>request.abort();},[api]);
   const [coachPending,setCoachPending]=useState(false);
   const [sourceMode,setSourceMode]=useState('mixed');
   const [publicTopic,setPublicTopic]=useState('');
-  const lastCoachQuestion=useRef<Question | undefined>(undefined);
   const [limit,setLimit]=useState(10);
   const [page,setPage]=useState<Page|null>(null);
   const [source,setSource]=useState<Source|null>(null);
@@ -181,9 +202,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
       setRevision(summary);setEditing(false);setShowQuestions(false);
       run.signal.throwIfAborted();
-      setResult(analysis.questions);setWarnings(analysis.warnings);setGeneratedCoach(Boolean(analysis.generatedCoach));
+      setResult(analysis.questions);setWarnings(analysis.warnings);
       setOptimization(analysis.optimization?{data:analysis.optimization,context:adjusted}:null);
-      setProgress({});restartBudget();setLimit(10);lastCoachQuestion.current=undefined;setPlanGenerated(true); }
+      setProgress({});restartBudget();setLimit(10);setPlanGenerated(true); }
     catch(error) { setNotice(run.signal.aborted?'Processing cancelled. Run again to resume from usable pages.':error instanceof Error?error.message:'The study plan could not load. Try again.'); }
     finally {controller.current=null;setProcessingMessage('');setBusy(false);}
   }
@@ -215,91 +236,89 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(readMinutes&&!pack.timeline.length)pack.timeline.push({title:revision.title+' · Read and recall',minutes:readMinutes});
   }
   const nextAction=pack.timeline[0];
-  function send(text:string, target?:Question, marks?:number) {
-    if(!text.trim())return;
+  const activeCoachRequest=useRef<AbortController|null>(null);
+  useEffect(()=>()=>activeCoachRequest.current?.abort(),[]);
+  async function askCoach(message:Message,request:CoachRequest) {
+    if(activeCoachRequest.current)return;
+    const operation=new AbortController();
+    activeCoachRequest.current=operation;
+    setCoachPending(true);
+    let reply:Message;
+    try{
+      const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
+        signal:AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]),body:JSON.stringify(request)});
+      const data=await response.json() as {explanation?:string;generated?:boolean;sources?:CoachSource[];code?:string};
+      if(!response.ok||!data.explanation?.trim()){
+        throw new Error(data.code==='usage_limit'?'The AI usage limit has been reached. Try again later.':'Couldn’t answer right now. Try again.');
+      }
+      reply={...message,text:data.explanation,generated:data.generated!==false,references:data.sources};
+    }catch(error){
+      if(operation.signal.aborted)return;
+      const errorMessage=error instanceof Error&&error.message==='The AI usage limit has been reached. Try again later.'
+        ?error.message:'Couldn’t answer right now. Try again.';
+      reply={...message,error:errorMessage,retry:request};
+    }finally{
+      if(activeCoachRequest.current===operation){activeCoachRequest.current=null;setCoachPending(false);}
+    }
+    setMessages(current=>current.map(item=>item===message?{...reply,pending:false}:item));
+  }
+  function send(value:string) {
+    const text=value.trim();
+    if(!text||activeCoachRequest.current)return;
     const minutes=duration(text);
     const familiarity=familiarityFrom(text);
-    let reply:string;
-    let answerSource:Source|null|undefined;
-    let generateFor:Question|undefined;
-    let useGemma=false;
-    if(minutes && /\b(left|remaining|replan|have|time to study|can study)\b/i.test(text)) {
+    let reply:string|undefined;
+    if(result&&minutes&&/\b(left|remaining|replan|can study|I (?:only )?have)\b/i.test(text)&&!text.includes('?')){
       update('minutes',minutes);setLimit(10);
       if(familiarity!=='unknown')update('familiarity',familiarity);
       reply='Updated the plan for '+minutes+' minutes, including time for recall.';
-    } else if(familiarity!=='unknown') {
+    }else if(result&&familiarity!=='unknown'&&!text.includes('?')){
       update('familiarity',familiarity);
       setElapsed(Math.max(0,Math.floor((Date.now()-timeAnchor.current)/60000)));
       setLimit(10);
       reply='Updated your preparation estimates for “'+familiarityLabels[familiarity].toLowerCase()+'”. Your checkpoint progress is still available.';
-    } else if(/next\s+(?:10|ten)|more questions/i.test(text)) {
+    }else if(result&&/^(?:show (?:the )?)?(?:next (?:10|ten)|more questions)[.!]?$/i.test(text)){
       setLimit(current=>current+10);
       reply=limit<fitted.length?'I added the next questions below.':'The current materials and study budget support '+fitted.length+' questions.';
-    } else {
-      const ranked=visible.map((question,index)=>({...question,id:index+1}));
-      const numbered = text.match(/(?:#|question\s+)(\d+)/i);
-      const words = text.toLowerCase().match(/[a-z]{3,}/g)??[];
-      const generic = new Set(['give','show','answer','suitable','marks','example','explain','simpler','english','what','about','this','that','minutes','minute']);
-      const meaningful = words.filter(word=>!generic.has(word));
-      const relevant = (result??[]).map(question=>({question, hits:meaningful.filter(word=>
-        (question.topic+' '+question.prompt).toLowerCase().match(/[a-z]{3,}/g)?.includes(word)).length}))
-        .filter(item=>item.hits>0).sort((a,b)=>b.hits-a.hits)[0]?.question;
-      const asksForContent=/\b(answer|explain|simpler|example|marks?|define)\b/i.test(text);
-      const selected=target??(numbered?visible[Number(numbered[1])-1]:relevant??(meaningful.length===0?lastCoachQuestion.current:undefined));
-      if(selected)lastCoachQuestion.current=selected;
-      if(asksForContent&&!sampleMode) {
-        answerSource=selected?.answerSource;
-        const excerpt=answerSource?.excerpt;
-        if(!selected)reply='Name a topic from your materials or select a question to work on.';
-        else if(!excerpt)reply='Your materials contain this question but no matching explanation. Add class notes or a solved answer to get a source-backed response.';
-        else if(/\bexample\b/i.test(text)&&!/\b(example|suppose|consider|for instance)\b/i.test(excerpt))
-          reply='The supporting passage does not contain a worked example. Here is the related evidence:\n'+answerLines(selected,false,15).join(' ');
-        else {
-          const focused=/\b(two minutes|2 min|simpler|brief)\b/i.test(text)?15:45;
-          reply='From your materials · '+selected.topic+'\n'+answerLines(selected,false,focused).join('\n')+
-            (/\bmarks?\b/i.test(text)?'\nUse these points to structure your answer. The material does not establish a marking rubric.':'');
-        }
-        generateFor=selected;
-      } else reply=activeApi.chat(text,target?[{...target,id:visible.indexOf(target)+1}]:ranked);
-      useGemma=!sampleMode&&!coachPending;
-      generateFor??=selected;
-      if(target && marks && sampleMode) {
-        const sentences=target.answer.match(/[^.!?]+[.!?]*/g) ?? [target.answer];
-        reply='Sample '+marks+'-mark outline · '+target.topic+'\n'+(marks===2?sentences.slice(0,2).join('').trim():target.answer);
-        if(marks===10) reply+='\nFor a longer response, define the terms and develop a worked example.';
+    }
+    if(sampleMode&&!reply)reply=activeApi.chat(text,visible.map((question,index)=>({...question,id:index+1})));
+    const message:Message={role:sampleMode?'Demo coach':'in-nocent',text:reply??'',pending:!reply};
+    setMessages(current=>[...current,{role:'You',text},message]);setChat('');
+    if(reply)return;
+
+    const topics=[...new Set((optimization?.data.topics.map(topic=>topic.title)??(result??[]).map(question=>question.topic)))].slice(0,20);
+    const numbered=text.match(/(?:#|question\s+)(\d+)/i);
+    const selected=numbered?visible[Number(numbered[1])-1]:undefined;
+    const previousQuestion=messages.filter(item=>item.role==='You').at(-1)?.text??'';
+    const query=new Set((text+' '+previousQuestion+' '+(selected?.topic??'')+' '+topics.join(' ')).toLowerCase().match(/[a-z]{4,}/g)??[]);
+    const retrieved=documents.flatMap(document=>{
+      if(files.find(file=>file.id===document.id)?.kind==='Past paper')return [];
+      return document.pages.filter(isTrusted).flatMap(page=>page.text.split(/\n+/).map((line,index)=>({
+        file:document.name,page:page.number,number:'Line '+(index+1),documentIndex:document.id,excerpt:line.trim().slice(0,650),
+      })));
+    }).map(source=>({source,score:[...new Set(source.excerpt.toLowerCase().match(/[a-z]{4,}/g)??[])].filter(word=>query.has(word)).length}))
+      .filter(match=>match.score>0).sort((a,b)=>b.score-a.score).slice(0,8).map(match=>match.source);
+    const candidates=[selected?.answerSource,...retrieved,...(revision?.passages??[]),...fitted.map(question=>question.answerSource)]
+      .filter((candidate):candidate is Source=>Boolean(candidate));
+    const sources=[...new Map(candidates.map(candidate=>[candidate.excerpt,candidate])).values()].slice(0,12);
+    const history:CoachRequest['history']=[];
+    for(let index=0;index<messages.length;index+=2){
+      const [user,assistant]=messages.slice(index,index+2);
+      if(user?.role==='You'&&assistant?.text&&!assistant.error&&!assistant.pending){
+        history.push({role:'user',content:user.text},{role:'assistant',content:assistant.text});
       }
     }
-    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:useGemma?(sourceMode==='notes'?'Preparing an explanation…':'Checking sources and preparing an explanation…'):reply,source:answerSource??undefined};
-    setMessages(current=>[...current,{role:'You',text},message]);setChat('');
-    if(useGemma){
-      setCoachPending(true);
-      const task=/^Generate revision notes/.test(text)?'notes':/\bexample\b/i.test(text)?'example':
-        /\bmarks?\b/i.test(text)?'exam':/\bsimpler\b/i.test(text)?'quick':generateFor?'coach':'chat';
-      const query=new Set((text+' '+(generateFor?.topic??'')).toLowerCase().match(/[a-z]{4,}/g)??[]);
-      const retrieved=documents.flatMap(document=>{
-        if(files.find(file=>file.id===document.id)?.kind==='Past paper')return [];
-        return document.pages.filter(isTrusted).flatMap(page=>page.text.split(/\n+/).map((line,index)=>({
-          file:document.name,page:page.number,number:'Line '+(index+1),documentIndex:document.id,excerpt:line.trim().slice(0,650),
-        })));
-      }).map(source=>({source,score:[...new Set(source.excerpt.toLowerCase().match(/[a-z]{4,}/g)??[])].filter(word=>query.has(word)).length}))
-        .filter(match=>match.score>0).sort((a,b)=>b.score-a.score).slice(0,6).map(match=>match.source);
-      const sources=[generateFor?.answerSource,...retrieved,...(revision?.passages??[]),...fitted.map(question=>question.answerSource)].filter(Boolean);
-      const distinct=[...new Map(sources.map(source=>[source!.excerpt,source])).values()].slice(0,12);
-      const history=messages.slice(-4).map(item=>({role:item.role==='You'?'user':'assistant',content:item.text}));
-      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(50000),
-        body:JSON.stringify({request:text,topic:generateFor?.topic,task,mode:sourceMode,publicTopic,
-          history,sources:distinct,minutes:remainingTime})})
-        .then(async response=>{
-          const data=await response.json() as {explanation?:string;error?:string;sources?:CoachSource[];webStatus?:string};
-          if(!response.ok||!data.explanation)throw new Error(data.error||'Generated explanation unavailable.');
-          return {...message,text:[data.explanation,data.webStatus].filter(Boolean).join('\n\n'),generated:true,references:data.sources,source:undefined};
-        }).catch(error=>({...message,text:error instanceof Error&&error.name==='Error'?error.message:'Generated explanation unavailable.'}))
-        .then(updated=>setMessages(current=>current.map(item=>item===message?updated:item)))
-        .finally(()=>setCoachPending(false));
-    }
+    void askCoach(message,{request:text,mode:'auto',task:/\bmarks?\b/i.test(text)?'exam':'chat',
+      topic:selected?.topic,subject:context.subject,topics,history:history.slice(-6),sources,minutes:remainingTime});
+  }
+  function retryCoach(message:Message) {
+    if(!message.retry||activeCoachRequest.current)return;
+    const pending:Message={role:message.role,text:'',pending:true};
+    setMessages(current=>current.map(item=>item===message?pending:item));
+    void askCoach(pending,message.retry);
   }
   function open(next:Page|null, reference:Source|null=null){setPage(next);setSource(reference);dialog.current?.showModal();}
-  function reset(){setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNotice('');setTimeReply('');setPlanGenerated(false);}
+  function reset(){activeCoachRequest.current?.abort();activeCoachRequest.current=null;setCoachPending(false);setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setContext(empty);setNeedsTime(false);setNotice('');setTimeReply('');setPlanGenerated(false);}
   function toggleExample(){setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);setExampleMode(!exampleMode);editPrompt(exampleMode?'':sample);}
   function modifyFile(id:number,kind?:string) {
     setFiles(current=>kind?current.map(file=>file.id===id?{...file,kind}:file):current.filter(file=>file.id!==id));
@@ -419,7 +438,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             <button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button>
           </article>}
           {showQuestions&&!questionList.length&&!revision&&<p>No supported questions were found.</p>}
-          {showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>send('Show next 10')}>Show next 10</button>}
+          {showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>setLimit(current=>current+10)}>Show next 10</button>}
           {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
         </section></div>
           {result.length>0&&pack.warnings.length>0&&<div className="coverage"><h3>Sources and Coverage</h3>
@@ -428,13 +447,31 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </details>
       </section>}
       </>}
-      {coachPage&&<section id="study-coach" className="study-output" aria-label="Study Coach"><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3>{!sampleMode&&<div className="study-output">{sourceControls}
-          <small>{generatedCoach?'Relevant excerpts may be sent to Cloudflare Workers AI. Only the public topic field is sent to web search.':coachUnavailable}</small>
-          {generatedCoach&&fitted.length>0&&<button className="secondary" disabled={coachPending} onClick={()=>send('Generate revision notes for: '+fitted.slice(0,remainingTime<=15?2:4).map(question=>question.topic).join(', '))}>Generate AI revision notes</button>}</div>}
-          <form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button></form><div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:Array.from({length:Math.ceil(messages.length/2)},(_,index)=>messages.slice(index*2,index*2+2)).reverse().flat().map((m,i)=><div key={i}><strong>{m.role}</strong>{m.generated&&<span className="badge">{m.references?.length?'AI-generated':'AI-generated · Not source-verified'}</span>}<p>{m.text}</p>
-          {Boolean(m.references?.length)&&<details><summary>References used</summary>{m.references?.map(reference=>reference.kind==='uploaded'
-            ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>Uploaded Source · {sourceLabel(reference)}</button>
-            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">Web Source · {reference.title} · {new URL(reference.url).hostname}</a>)}</details>}{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div></aside></section>}
+      {coachPage&&<section id="study-coach" className="study-output" aria-labelledby="study-coach-title">
+        <div className="coach">
+          <h3 id="study-coach-title">Study Coach</h3>
+          <form className="inline" onSubmit={event=>{event.preventDefault();send(chat);}}>
+            <input aria-label="Ask about your plan" placeholder="Ask a question…" maxLength={500} value={chat} onChange={event=>setChat(event.target.value)}/>
+            <button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button>
+          </form>
+          <div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0}>
+            {Array.from({length:Math.ceil(messages.length/2)},(_,index)=>index*2).reverse().map(index=>
+              <div className="coach-turn" key={index}>{messages.slice(index,index+2).map(message=>
+                <div className="coach-message" key={message.role}>
+                  <strong>{message.role}</strong>
+                  {message.pending?<small role="status">Thinking…</small>:message.error?
+                    <div className="coach-meta"><small role="alert">{message.error}</small>
+                      <button type="button" className="link accent" disabled={coachPending} onClick={()=>retryCoach(message)}>Retry</button></div>
+                    :<>{message.role==='You'?<p>{message.text}</p>:<CoachAnswer text={message.text}/>}
+                      {message.generated&&<small>{message.references?.length?'AI-generated':'AI-generated · Not source-verified'}</small>}
+                      {Boolean(message.references?.length)&&<details><summary>Sources ({message.references?.length})</summary>{message.references?.map(reference=>reference.kind==='uploaded'
+                        ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
+                        :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</details>}
+                    </>}
+                </div>)}</div>)}
+          </div>
+        </div>
+      </section>}
     </main>
     <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>
     <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>
