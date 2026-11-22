@@ -41,7 +41,9 @@ it('requires opt-in and refuses exhausted global allowances before calling Gemma
   expect((await handle(post('coach',body),env)).status).toBe(429);
   expect(run).not.toHaveBeenCalled();
   const answer=await (await handle(post('coach',body),env)).json();
-  expect(run).toHaveBeenCalledWith(MODEL,expect.objectContaining({max_completion_tokens:300}));
+  expect(run).toHaveBeenCalledWith(MODEL,expect.objectContaining({
+    max_completion_tokens:300,chat_template_kwargs:{enable_thinking:false},
+  }));
   expect(answer.sources).toMatchObject([{id:'N1',file:'Notes.pdf',page:7}]);
   expect(answer.sources).toHaveLength(1);
 });
@@ -107,4 +109,15 @@ it('limits concurrent inference globally and releases only the matching lease',a
   expect(await ask(3)).toBe(false);
   await ask(1,'release');
   expect(await ask(3)).toBe(true);
+});
+
+it('never treats reasoning-only output as an answer and accepts a populated provider text fallback',async()=>{
+  const {env,run}=setup();
+  run.mockResolvedValueOnce({choices:[{finish_reason:'length',message:{content:null,reasoning_content:'internal reasoning'}}]});
+  const response=await handle(post('coach',{request:'Explain deadlock'}),env);
+  expect(response.status).toBe(502);
+  expect(await response.json()).toMatchObject({code:'invalid_response'});
+  run.mockResolvedValueOnce({choices:[{message:{content:''}}],response:'Deadlock occurs when processes wait indefinitely for one another.'});
+  const valid=await handle(post('coach',{request:'Explain deadlock'}),env);
+  expect(await valid.json()).toMatchObject({explanation:'Deadlock occurs when processes wait indefinitely for one another.'});
 });

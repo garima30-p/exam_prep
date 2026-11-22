@@ -73,12 +73,20 @@ async function runGemma(env,guest,messages,maxTokens){
  let result;
  try{
   if(!await charge(env,guest,'ai',lease))return {code:'usage_limit',status:429,durationMs:Date.now()-started};
-  const inference=Promise.resolve().then(()=>env.AI.run(MODEL,{messages,max_completion_tokens:maxTokens,temperature:.2}));
+  const inference=Promise.resolve().then(()=>env.AI.run(MODEL,{
+   messages,max_completion_tokens:maxTokens,temperature:.2,
+   chat_template_kwargs:{enable_thinking:false},
+  }));
   providerStarted=true;
   void inference.finally(()=>charge(env,guest,'release',lease)).catch(()=>{});
   const response=await Promise.race([inference,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('timeout')),18_000);})]);
-  const text=clean(response?.choices?.[0]?.message?.content??response?.response,4200).replace(/^<think>[\s\S]*?<\/think>\s*/,'').trim();
-  result=text?{text,status:200}:{code:'invalid_response',status:502};
+  const choice=response?.choices?.[0];
+  const text=[choice?.message?.content,response?.response]
+   .map(value=>clean(value,4200).replace(/^<think>[\s\S]*?(?:<\/think>\s*|$)/,'').trim())
+   .find(Boolean);
+  const reason=choice?.finish_reason;
+  const finishReason=['stop','length','tool_calls','content_filter'].includes(reason)?reason:undefined;
+  result=text?{text,status:200}:{code:'invalid_response',status:502,...(finishReason?{finishReason}:{})};
  }catch(error){
   const providerCode=String(error?.code??'');
   const limit=error?.status===429||['429','3036'].includes(providerCode);

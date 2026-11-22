@@ -199,6 +199,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     ? plan.selectedQuestionIds.map(id=>optimization.data.candidates.find(question=>question.id===id)!)
     : fitQuestions(result ?? [],context.minutes);
   const visible=(remainingTime||context.minutes?fitted:result??[]).slice(0,limit);
+  const questionList=visible.length?visible:(result??[]).slice(0,limit);
+  const questionsOutsideBudget=Boolean(context.minutes&&!visible.length&&questionList.length);
   const plannedIds=new Set(fitted.map(question=>question.id));
   const tracked=optimization?.data.candidates.filter(question=>!plannedIds.has(question.id)&&progress[question.id])??[];
   const coveredUnits=[...new Set(visible.map(question=>question.unit).filter(Boolean))].sort((a,b)=>a-b);
@@ -402,15 +404,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         <button className="secondary" onClick={()=>setShowQuestions(true)} disabled={showQuestions}>Generate Questions</button>
         <details className="study-output" open={showQuestions||undefined}><summary>More study tools</summary>
         <div className="result-grid"><section aria-labelledby="important-questions">
-          {showQuestions&&(visible.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
+          {showQuestions&&(questionList.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
 
-          {showQuestions&&(visible.length?visible:context.minutes?[]:result.slice(0,10)).map((question,index)=>renderQuestion(question,index))}
-          {showQuestions&&!visible.length&&revision&&<article className="question">
+          {showQuestions&&questionsOutsideBudget&&<p>These questions are available for reference. None fits the remaining preparation budget.</p>}
+          {showQuestions&&questionList.map((question,index)=>renderQuestion(question,index))}
+          {showQuestions&&!questionList.length&&revision&&<article className="question">
             <p>Practice question · based on your study material</p><h3>{revision.recall}</h3>
             <details><summary>Show answer</summary><p>{revision.answer}</p></details>
             <button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button>
           </article>}
-          {showQuestions&&!visible.length&&!revision&&<p>No supported questions fit this plan.</p>}
+          {showQuestions&&!questionList.length&&!revision&&<p>No supported questions were found.</p>}
           {showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>send('Show next 10')}>Show next 10</button>}
           {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
         </section></div>
