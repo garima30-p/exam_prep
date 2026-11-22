@@ -1,4 +1,4 @@
-import { coachEnabled, generateStudyReply } from './study-ai.mjs';
+import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, generateStudyReply } from './study-ai.mjs';
 import { administrativeLine } from './study-material.mjs';
 import { describeLearning, makeLearningPlan } from './learning.mjs';
 import { exactQuestionKey } from './semantic.mjs';
@@ -227,10 +227,14 @@ export async function handle(request,env) {
   const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
   const json=(data,status=200)=>Response.json(data,{status,headers});
   const path=new URL(request.url).pathname;
-  if(path==='/api/coach/status'&&request.method==='GET')return json({available:coachEnabled(env)});
+  if(path==='/api/coach/diagnostic')return diagnoseGemma(request,env);
+  if(path==='/api/coach/status'&&request.method==='GET'){
+    const code=aiStatus(env);
+    return json(code==='ready'?{available:true}:{available:false,code,message:aiErrors[code]});
+  }
   if (path==='/api/health' && request.method==='GET') return json({status:'ok'});
   if (path!=='/api/analyze' && path!=='/api/coach') return json({error:'Endpoint not found.'},404);
-  if (path==='/api/coach'&&!coachEnabled(env))return json({error:'Generated explanations are disabled.'},503);
+  if (path==='/api/coach'&&!coachEnabled(env))return json({error:aiErrors[aiStatus(env)],code:aiStatus(env)},503);
   if (request.method!=='POST') return json({error:'Use POST.'},405);
   if (request.headers.get('origin') && request.headers.get('origin')!==new URL(request.url).origin) return json({error:'Origin denied.'},403);
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return json({error:'JSON required.'},415);

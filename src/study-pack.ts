@@ -16,6 +16,7 @@ export type StudyNote = {
   readOnly: boolean;
 };
 export type StudyPack = {
+  generatedNotes?:{text:string;references:string[]};
   revision?:Revision;
   subject: string;
   context: string[];
@@ -97,6 +98,11 @@ export function exportBlocks(pack: StudyPack, section: Section): ExportBlock[] {
   add(3, pack.context.join(' · '));
   if (section === 'all' || section === 'notes') {
     add(1, 'Must Read Now');
+    if(pack.generatedNotes){
+      add(3,'AI-generated · Not source-verified');
+      for(const paragraph of pack.generatedNotes.text.split(/\n+/))if(paragraph.trim())add(3,paragraph);
+      for(const reference of pack.generatedNotes.references)add(3,'Source: '+reference);
+    }
     if(pack.revision){
       add(2,pack.revision.title);
       for(const passage of pack.revision.passages){
@@ -106,8 +112,8 @@ export function exportBlocks(pack: StudyPack, section: Section): ExportBlock[] {
       add(3,'Recall: '+pack.revision.recall);
       add(3,pack.revision.answer);
     }
-    if (!pack.notes.length&&!pack.revision) add(3, noNotes);
-    for (const note of pack.notes) {
+    if (!pack.notes.length&&!pack.revision&&!pack.generatedNotes) add(3, noNotes);
+    for (const note of pack.generatedNotes?[]:pack.notes) {
       add(2, note.priority + '. ' + note.question.topic + ' · ' + note.minutes + ' min' + (note.readOnly ? ' (read only)' : ''));
       note.paragraphs.forEach(text=>add(3,text));
       if (note.checkpoint) add(3, 'Recall: ' + note.checkpoint);

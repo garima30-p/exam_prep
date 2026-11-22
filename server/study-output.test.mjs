@@ -41,7 +41,7 @@ it('requires opt-in and refuses exhausted global allowances before calling Gemma
   expect((await handle(post('coach',body),env)).status).toBe(429);
   expect(run).not.toHaveBeenCalled();
   const answer=await (await handle(post('coach',body),env)).json();
-  expect(run).toHaveBeenCalledWith(MODEL,expect.objectContaining({max_tokens:300}));
+  expect(run).toHaveBeenCalledWith(MODEL,expect.objectContaining({max_completion_tokens:300}));
   expect(answer.sources).toMatchObject([{id:'N1',file:'Notes.pdf',page:7}]);
   expect(answer.sources).toHaveLength(1);
 });
@@ -77,4 +77,34 @@ it('enforces one shared search budget across distinct guests',async()=>{
     const request=post('budget',{kind:'search',guest:index.toString(16).padStart(64,'0')});
     expect((await (await budget.fetch(request)).json()).allowed).toBe(index<10);
   }
+});
+
+it('hides the fixed diagnostic without its secret and parses a Gemma chat completion',async()=>{
+  const {env,run}=setup();
+  env.STUDY_AI_DIAGNOSTIC_TOKEN='synthetic-test-token-not-a-secret';
+  run.mockResolvedValue({choices:[{message:{content:'Deadlock is a cycle of waiting processes.'}}]});
+  const url='https://example.test/api/coach/diagnostic';
+  expect((await handle(new Request(url,{method:'POST'}),env)).status).toBe(404);
+  expect(run).not.toHaveBeenCalled();
+  const response=await handle(new Request(url,{method:'POST',headers:{Authorization:'Bearer '+env.STUDY_AI_DIAGNOSTIC_TOKEN}}),env);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({model:MODEL,bindingAvailable:true,ok:true,parsed:true,explanation:'Deadlock is a cycle of waiting processes.'});
+});
+
+it('limits concurrent inference globally and releases only the matching lease',async()=>{
+  const entries=new Map();
+  const budget=new StudyBudget({storage:{transaction:async callback=>callback({
+    get:async key=>entries.get(key),put:async(key,value)=>entries.set(key,value),
+  })}});
+  const ask=async(index,kind='ai',lease='lease-'+index)=>{
+    const response=await budget.fetch(post('budget',{kind,lease,guest:index.toString(16).padStart(64,'0')}));
+    return (await response.json()).allowed;
+  };
+  expect(await ask(1)).toBe(true);
+  expect(await ask(2)).toBe(true);
+  expect(await ask(3)).toBe(false);
+  await ask(1,'release','wrong lease');
+  expect(await ask(3)).toBe(false);
+  await ask(1,'release');
+  expect(await ask(3)).toBe(true);
 });

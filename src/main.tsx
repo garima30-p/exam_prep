@@ -12,7 +12,7 @@ import { DocumentReview } from './document-review';
 import { acceptedDocuments, documentFormat, documentLocation, originalDocumentLink } from './document-formats';
 import { StudyCharacter, ThemeHero, ThemePicker, useTheme } from './themes';
 import { answerLines, buildStudyPack, familiarityLabels, sourceLabel } from './study-pack';
-import { DownloadStudyPack, StudyOutput } from './study-output';
+import { DownloadStudyPack } from './study-output';
 import { revise, revisionFromAnswer } from './revision';
 import type { Revision } from './revision';
 import './style.css';
@@ -57,6 +57,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [editing,setEditing]=useState(false);
   const [showQuestions,setShowQuestions]=useState(false);
   const [aiNote,setAiNote]=useState('');
+  const [aiReferences,setAiReferences]=useState<CoachSource[]>([]);
+  const [coachPage,setCoachPage]=useState(()=>typeof location!=='undefined'&&location.hash==='#study-coach');
+  useEffect(()=>{const read=()=>setCoachPage(location.hash==='#study-coach');window.addEventListener('hashchange',read);return ()=>window.removeEventListener('hashchange',read);},[]);
   const resultHeading=useRef<HTMLHeadingElement>(null);
   useEffect(()=>{if(planGenerated&&!editing){resultHeading.current?.focus();resultHeading.current?.scrollIntoView?.({block:'start'});}},[planGenerated,editing]);
   const [dragging,setDragging]=useState(false);
@@ -71,7 +74,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   useEffect(()=>{if(chatLog.current)chatLog.current.scrollTop=0;},[messages]);
   const [chat,setChat]=useState('');
   const [generatedCoach,setGeneratedCoach]=useState(false);
-  useEffect(()=>{if(api===demoApi)return;const request=new AbortController();void fetch('/api/coach/status',{signal:request.signal}).then(response=>response.json()).then(data=>setGeneratedCoach(data.available===true)).catch(()=>{});return ()=>request.abort();},[api]);
+  const [coachUnavailable,setCoachUnavailable]=useState('AI generation is temporarily unavailable.');
+  useEffect(()=>{if(api===demoApi)return;const request=new AbortController();void fetch('/api/coach/status',{signal:request.signal}).then(response=>response.json()).then(data=>{setGeneratedCoach(data.available===true);if(typeof data.message==='string')setCoachUnavailable(data.message);}).catch(()=>{});return ()=>request.abort();},[api]);
   const [coachPending,setCoachPending]=useState(false);
   const [sourceMode,setSourceMode]=useState('mixed');
   const [publicTopic,setPublicTopic]=useState('');
@@ -148,20 +152,32 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
       const summary=extracted??revisionFromAnswer(analysis.questions.find(question=>question.answerSource))
         ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
-      if(!summary&&(!analysis.questions.length||analysis.questions.every(question=>question.reason.includes('syllabus')))){
-        setNotice('There is not enough explanatory material to generate study notes. Add class notes, a textbook passage, or a solved paper.');
+      const allowWeb=sourceMode!=='notes'&&Boolean(publicTopic.trim());
+      if(!summary&&!allowWeb){
+        setNotice('There is not enough explanatory material to generate study notes. Add class notes or set a public search topic in Study Coach.');
         return;
       }
       setAiNote('');
-      if(summary&&analysis.generatedCoach&&!sampleMode){
+      setAiReferences([]);
+      if(!sampleMode){
+        setProcessingMessage('Generating study notes with Gemma…');
+        const failure=summary?'AI generation is temporarily unavailable. Your material was extracted successfully, but no AI summary was generated.'
+          :'AI generation is temporarily unavailable. No AI summary was generated.';
         try {
-          const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(24000)]),
-            body:JSON.stringify({task:'notes',mode:'notes',minutes:adjusted.minutes,topic:summary.title,
-              request:'Write concise exam notes and a short recall checklist for '+summary.title+'. Use at most 250 words.',
-              sources:summary.passages})});
-          const data=await response.json() as {explanation?:string};
-          if(response.ok&&data.explanation)setAiNote(data.explanation.trim().split(/\s+/).slice(0,250).join(' '));
-        }catch{run.signal.throwIfAborted();}
+          const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(29000)]),
+            body:JSON.stringify({task:'notes',mode:summary?'notes':sourceMode,publicTopic,minutes:adjusted.minutes,
+              topic:summary?.title??adjusted.subject,request:'Write concise exam notes with important concepts and recall points for '+(summary?.title||adjusted.subject||publicTopic)+'.',
+              sources:summary?.passages??[]})});
+          const data=await response.json() as {explanation?:string;error?:string;sources?:CoachSource[]};
+          if(!response.ok||!data.explanation?.trim()){
+            setNotice(failure+(data.error?' '+data.error:''));return;
+          }
+          setAiNote(data.explanation);
+          setAiReferences(data.sources??[]);
+        }catch{
+          run.signal.throwIfAborted();
+          setNotice(failure+' The request failed.');return;
+        }
       }
       setRevision(summary);setEditing(false);setShowQuestions(false);
       run.signal.throwIfAborted();
@@ -191,8 +207,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const pack = buildStudyPack(context,remainingTime,plan,fitted,visible,optimization?.data.candidates??result??[],
     sampleMode,[...warnings,...(plan?.warnings??[]),coverageMessage].filter(Boolean));
   const readMinutes=revision&&remainingTime?Math.min(remainingTime,Math.max(1,Math.ceil(revision.passages.length/2))):0;
+  if(aiNote&&!sampleMode)pack.generatedNotes={text:aiNote,references:aiReferences.map(source=>source.kind==='uploaded'?sourceLabel(source):source.title+' · '+source.url)};
   if(revision){
-    pack.revision=revision;
+    if(sampleMode)pack.revision=revision;
     if(readMinutes&&!pack.timeline.length)pack.timeline.push({title:revision.title+' · Read and recall',minutes:readMinutes});
   }
   const nextAction=pack.timeline[0];
@@ -250,7 +267,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         if(marks===10) reply+='\nFor a longer response, define the terms and develop a worked example.';
       }
     }
-    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:useGemma?(sourceMode==='notes'?'Preparing an explanation…':'Checking sources and preparing an explanation…'):reply,source:answerSource??undefined};
+    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:useGemma?(sourceMode==='notes'?'Preparing an explanation…':'Checking sources and preparing an explanation…'):!sampleMode&&!generatedCoach?coachUnavailable:reply,source:answerSource??undefined};
     setMessages(current=>[...current,{role:'You',text},message]);setChat('');
     if(useGemma){
       setCoachPending(true);
@@ -267,14 +284,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const sources=[generateFor?.answerSource,...retrieved,...(revision?.passages??[]),...fitted.map(question=>question.answerSource)].filter(Boolean);
       const distinct=[...new Map(sources.map(source=>[source!.excerpt,source])).values()].slice(0,12);
       const history=messages.slice(-4).map(item=>({role:item.role==='You'?'user':'assistant',content:item.text}));
-      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(24000),
+      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(29000),
         body:JSON.stringify({request:text,topic:generateFor?.topic,task,mode:sourceMode,publicTopic,
           history,sources:distinct,minutes:remainingTime})})
         .then(async response=>{
           const data=await response.json() as {explanation?:string;error?:string;sources?:CoachSource[];webStatus?:string};
           if(!response.ok||!data.explanation)throw new Error(data.error||'Generated explanation unavailable.');
           return {...message,text:[data.explanation,data.webStatus].filter(Boolean).join('\n\n'),generated:true,references:data.sources,source:undefined};
-        }).catch(error=>({...message,text:reply+'\n'+(error instanceof Error&&error.name==='Error'?error.message:'Generated explanation unavailable.')}))
+        }).catch(error=>({...message,text:error instanceof Error&&error.name==='Error'?error.message:'Generated explanation unavailable.'}))
         .then(updated=>setMessages(current=>current.map(item=>item===message?updated:item)))
         .finally(()=>setCoachPending(false));
     }
@@ -324,10 +341,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           </li>)}
         </ol>
       </details>}
-      {index!==undefined&&<div className="question-actions">
-        {sampleMode?[2,5,10].map(m=><button className="secondary" key={m} onClick={()=>send('Show a '+m+'-mark answer for #'+(index+1),q,m)}>{m}-mark answer</button>):<button className="secondary" onClick={()=>send('Show answer evidence for #'+(index+1),q)}>Show answer evidence</button>}
-        <button className="secondary" onClick={()=>send('Why #'+(index+1)+'?',q)}>Ask why?</button>
-      </div>}
+
     </article>;
   }
   const hasContext=Boolean(prompt.trim() || files.length);
@@ -335,8 +349,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     <header className="top"><div className="wrap header-inner">
       <a className="brand" href="#main" aria-label="in-nocent home"><span className="brand-mark"><Icon name="spark"/></span>in-nocent<span className="brand-dot">.</span></a>
       <ThemePicker {...theme}/>
+      <nav aria-label="Workspace"><a className="link" href={coachPage?'#main':'#study-coach'} onClick={event=>{
+        event.preventDefault();
+        history.pushState(null,'',event.currentTarget.hash);
+        setCoachPage(!coachPage);
+      }}>{coachPage?'Study workspace':'Study Coach'}</a></nav>
     </div></header>
     <main id="main" className={'wrap '+(planGenerated?'workspace':'landing')}>
+      {!coachPage&&<>
       <ThemeHero {...theme}/>
       <section aria-label="Exam setup" className="setup">
         <form onSubmit={event=>{if(!planGenerated){void generate(event);return;}event.preventDefault();if(editing)setEditing(false);else resultHeading.current?.scrollIntoView?.({block:'start'});}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
@@ -369,24 +389,18 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       {result && planGenerated && !editing && <section className="results" aria-labelledby="results-title">
         <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse notes">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
         <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
-        {revision?<article className="study-note" aria-label="Revision notes">
-          <h3>{revision.title}</h3>
-          {aiNote&&<div><strong>AI-generated · Not source-verified</strong><p>{aiNote}</p></div>}
-          {!aiNote&&revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
-          <details><summary>Uploaded evidence</summary>{[...new Map(revision.passages.map(source=>[source.file+':'+source.page,source])).values()]
-            .map(source=><button className="link accent source" key={sourceLabel(source)} onClick={()=>open(null,source)}>{sourceLabel(source)}</button>)}</details>
-          <p><strong>Remember before the exam:</strong> {revision.recall}</p>
-          <details key={revision.answer}><summary>Show answer</summary><p>{revision.answer}</p></details>
-        </article>:<article className="study-note"><p>These are questions found in the material. They show what was asked, but no supporting answer was found.</p>
-          {result.slice(0,3).map(question=><div key={question.id}><p>{question.prompt}</p><button className="link accent" onClick={()=>open(null,question.source)}>{sourceLabel(question.source)}</button></div>)}
+        {aiNote?<article className="study-note" aria-label="Revision notes">
+          <strong>AI-generated · Not source-verified</strong><p style={{whiteSpace:'pre-wrap'}}>{aiNote}</p>
+          {aiReferences.length>0&&<details><summary>References used</summary>{aiReferences.map(reference=>reference.kind==='uploaded'
+            ?<button className="link accent source" key={reference.id} onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
+            :<a className="link accent source" key={reference.id} href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}</details>}
+        </article>:sampleMode&&revision&&<article className="study-note" aria-label="Revision notes">
+          <h3>{revision.title}</h3>{revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
+          <details><summary>Show answer</summary><p>{revision.answer}</p></details>
         </article>}
         {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
         <button className="secondary" onClick={()=>setShowQuestions(true)} disabled={showQuestions}>Generate Questions</button>
         <details className="study-output" open={showQuestions||undefined}><summary>More study tools</summary>
-        <StudyOutput pack={pack} openSource={reference=>open(null,reference)} ask={question=>{
-          send('Explain '+question.topic,question);
-          document.getElementById('study-coach-title')?.scrollIntoView?.({block:'nearest'});
-        }}/>
         <div className="result-grid"><section aria-labelledby="important-questions">
           {showQuestions&&(visible.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
 
@@ -405,14 +419,15 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           </div>}
         </details>
       </section>}
-      <section className="study-output" aria-label="Study Coach"><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3>{!sampleMode&&<div className="study-output"><label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
+      </>}
+      {coachPage&&<section id="study-coach" className="study-output" aria-label="Study Coach"><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3>{!sampleMode&&<div className="study-output"><label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
           {sourceMode!=='notes'&&generatedCoach&&<label>Public topic for web search<input value={publicTopic} maxLength={100} placeholder="e.g. deadlock avoidance" onChange={event=>setPublicTopic(event.target.value)}/></label>}
-          <small>{generatedCoach?'Relevant excerpts may be sent to Cloudflare Workers AI. Only the public topic field is sent to web search.':'AI generation is unavailable. Source-backed study tools still work.'}</small>
+          <small>{generatedCoach?'Relevant excerpts may be sent to Cloudflare Workers AI. Only the public topic field is sent to web search.':coachUnavailable}</small>
           {generatedCoach&&fitted.length>0&&<button className="secondary" disabled={coachPending} onClick={()=>send('Generate revision notes for: '+fitted.slice(0,remainingTime<=15?2:4).map(question=>question.topic).join(', '))}>Generate AI revision notes</button>}</div>}
           <form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button></form><div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:Array.from({length:Math.ceil(messages.length/2)},(_,index)=>messages.slice(index*2,index*2+2)).reverse().flat().map((m,i)=><div key={i}><strong>{m.role}</strong>{m.generated&&<span className="badge">AI-generated · Not source-verified</span>}<p>{m.text}</p>
           {Boolean(m.references?.length)&&<details><summary>References used</summary>{m.references?.map(reference=>reference.kind==='uploaded'
             ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>Uploaded Source · {sourceLabel(reference)}</button>
-            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">Web Source · {reference.title} · {new URL(reference.url).hostname}</a>)}</details>}{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div></aside></section>
+            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">Web Source · {reference.title} · {new URL(reference.url).hostname}</a>)}</details>}{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div></aside></section>}
     </main>
     <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>
     <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>

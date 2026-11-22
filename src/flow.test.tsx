@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { App } from './main';
 import { demoApi, fixture } from './api';
 import type { ExamApi, RankedQuestion } from './api';
@@ -13,6 +13,7 @@ it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary 
   document.body.append(host);
   const root=createRoot(host);
   const api:ExamApi={...demoApi,analyze:async()=>({questions:[],warnings:[]})};
+  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'The Workers AI binding is missing.'},{status:503})));
   try{
     await act(async()=>root.render(<App api={api}/>));
     await act(async()=>{
@@ -22,14 +23,15 @@ it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary 
       prompt.dispatchEvent(new Event('input',{bubbles:true}));
     });
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    expect(document.activeElement?.id).toBe('results-title');
-    expect(host.querySelector('[aria-label="Revision notes"]')?.textContent).toContain('A hit updates recency in LRU.');
-    expect([...host.querySelectorAll('[aria-label="Revision notes"] details summary')].map(node=>node.textContent)).toContain('Show answer');
-    expect(host.querySelector('.composer')).not.toBeNull();
-    expect(host.textContent?.includes('Start here:')).toBe(Boolean(prefix));
+    expect(host.querySelector('[aria-label="Revision notes"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('no AI summary was generated');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Workers AI binding is missing');
+    expect(host.querySelector('#prompt')).not.toBeNull();
   }finally{
     await act(async()=>root.unmount());
     host.remove();
+    vi.unstubAllGlobals();
+    history.replaceState(null,'',location.pathname);
   }
 });
 
@@ -60,15 +62,19 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(host.querySelectorAll('.question')).toHaveLength(10);
     expect(document.activeElement?.id).toBe('results-title');
     expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Notes are generated ↓');
-    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Ask why?')!.click());
+    expect(host.querySelector('.coach')).toBeNull();
+    await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
+    await act(async()=>setValue(host.querySelector<HTMLInputElement>('[aria-label="Ask about your plan"]')!,'Why #1?'));
+    await act(async()=>host.querySelector('.coach form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     expect(host.querySelector('[role=log]')?.textContent).toContain('page 1, Q1');
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('[aria-label="Ask about your plan"]')!,'Only 30 minutes left'));
     await act(async()=>host.querySelector('.coach form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    expect(host.querySelector('[role=log]')?.textContent?.indexOf('Only 30 minutes left')).toBeLessThan(host.querySelector('[role=log]')?.textContent?.indexOf('Why #1?')??0);
+    await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
     expect(host.querySelector('.summary')?.textContent).toContain('30 min available');
     expect(host.querySelectorAll('.question').length).toBeGreaterThan(0);
     const allocations=[...host.querySelectorAll('.study-timeline strong')].map(item=>parseInt(item.textContent??'0',10));
     expect(allocations.reduce((sum,item)=>sum+item,0)).toBeLessThanOrEqual(30);
-    expect(host.querySelector('[role=log]')?.textContent?.indexOf('Only 30 minutes left')).toBeLessThan(host.querySelector('[role=log]')?.textContent?.indexOf('Why #1?')??0);
     await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. I have two hours.'));
     expect(host.querySelector('#results-title')).toBeNull();
     expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Generate Notes');
@@ -90,6 +96,7 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
       checkpoints:[{id:'u',text:'Explain the idea',phase:'understanding',label:'Type guide'},
         {id:'p',text:'Try an example',phase:'practice',label:'Type guide'},
         {id:'r',text:'Recall it',phase:'recall',label:'Type guide'}]}}));
+  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({available:true,explanation:'Normalization reduces duplicated data.',sources:[]})));
   const topics=questions.map(question=>({id:question.topic,title:question.topic,weight:1}));
   const api:ExamApi={...demoApi,async analyze(context) {
     calls++;
@@ -104,12 +111,14 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
   const submit=(selector:string)=>host.querySelector(selector)!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
   try {
     await act(async()=>root.render(<App api={api}/>));
-    await act(async()=>input('textarea','My DBMS exam is tomorrow. I have 67 minutes.'));
+    await act(async()=>input('textarea','My DBMS exam is tomorrow. I have 67 minutes. Summarize my notes: Normalization reduces duplicated data.'));
     await act(async()=>submit('.composer'));
     await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
     expect([...host.querySelectorAll('.question h3')].map(item=>item.textContent)).toEqual(questions.slice(1).map(q=>q.prompt));
+    await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
     await act(async()=>input('[aria-label="Ask about your plan"]','I only have 45 minutes now.'));
     await act(async()=>submit('.coach form'));
+    await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
     expect(host.querySelector('.question h3')?.textContent).toBe(questions[0].prompt);
     expect(host.querySelector('.question .source')?.textContent).toContain('p. 1 · Q1');
     const checkpoint=host.querySelector<HTMLSelectElement>('.question select')!;
@@ -117,8 +126,10 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
       checkpoint.value='completed';
       checkpoint.dispatchEvent(new Event('change',{bubbles:true}));
     });
+    await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
     await act(async()=>input('[aria-label="Ask about your plan"]','I have only 44 minutes left.'));
     await act(async()=>submit('.coach form'));
+    await act(async()=>host.querySelector<HTMLAnchorElement>('nav[aria-label="Workspace"] a[href="#main"]')!.click());
     expect(host.querySelector<HTMLSelectElement>('.question select')?.value).toBe('completed');
     expect(host.querySelector('.question summary')?.textContent).toContain('1/3 checkpoints');
     expect(calls).toBe(1);
