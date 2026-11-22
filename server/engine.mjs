@@ -255,7 +255,11 @@ export async function handle(request,env) {
     }
     raw+=decoder.decode();
     const input=JSON.parse(raw);
-    if(path==='/api/coach')return await generateStudyReply(input,env,request);
+    if(path==='/api/coach'){
+      if(!input||typeof input!=='object')return json({error:'Invalid AI request.',code:'invalid_request'},400);
+      try{return await generateStudyReply(input,env,request);}
+      catch{return json({error:aiErrors.request_failed,code:'request_failed'},502);}
+    }
     const materials=validate(input);
     if (!materials) return json({error:'Invalid material or page structure.'},400);
     const {questions,topics}=buildPlan(materials);

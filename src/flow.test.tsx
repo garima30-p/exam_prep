@@ -24,7 +24,7 @@ it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary 
     });
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     expect(host.querySelector('[aria-label="Revision notes"]')).toBeNull();
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('no AI summary was generated');
+    expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('AI generation is temporarily unavailable');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('Workers AI binding is missing');
     expect(host.querySelector('#prompt')).not.toBeNull();
   }finally{

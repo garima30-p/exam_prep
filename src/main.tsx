@@ -152,7 +152,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
       const summary=extracted??revisionFromAnswer(analysis.questions.find(question=>question.answerSource))
         ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
-      const allowWeb=sourceMode!=='notes'&&Boolean(publicTopic.trim());
+      const allowWeb=sourceMode!=='notes'&&!sampleMode;
       if(!summary&&!allowWeb){
         setNotice('There is not enough explanatory material to generate study notes. Add class notes or set a public search topic in Study Coach.');
         return;
@@ -164,13 +164,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         const failure=summary?'AI generation is temporarily unavailable. Your material was extracted successfully, but no AI summary was generated.'
           :'AI generation is temporarily unavailable. No AI summary was generated.';
         try {
-          const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(29000)]),
-            body:JSON.stringify({task:'notes',mode:summary?'notes':sourceMode,publicTopic,minutes:adjusted.minutes,
-              topic:summary?.title??adjusted.subject,request:'Write concise exam notes with important concepts and recall points for '+(summary?.title||adjusted.subject||publicTopic)+'.',
+          const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(50000)]),
+            body:JSON.stringify({task:'notes',mode:sourceMode,publicTopic,minutes:adjusted.minutes,
+              topic:summary?.title??adjusted.subject,request:'Write concise exam notes with important concepts and recall points for '+(summary?.title||adjusted.subject||publicTopic||'the supplied study material')+'.',
               sources:summary?.passages??[]})});
-          const data=await response.json() as {explanation?:string;error?:string;sources?:CoachSource[]};
+          const data=await response.json() as {explanation?:string;error?:string;code?:string;sources?:CoachSource[]};
           if(!response.ok||!data.explanation?.trim()){
-            setNotice(failure+(data.error?' '+data.error:''));return;
+            setNotice(data.error||'No valid AI summary was returned.');return;
           }
           setAiNote(data.explanation);
           setAiReferences(data.sources??[]);
@@ -286,7 +286,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const sources=[generateFor?.answerSource,...retrieved,...(revision?.passages??[]),...fitted.map(question=>question.answerSource)].filter(Boolean);
       const distinct=[...new Map(sources.map(source=>[source!.excerpt,source])).values()].slice(0,12);
       const history=messages.slice(-4).map(item=>({role:item.role==='You'?'user':'assistant',content:item.text}));
-      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(29000),
+      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(50000),
         body:JSON.stringify({request:text,topic:generateFor?.topic,task,mode:sourceMode,publicTopic,
           history,sources:distinct,minutes:remainingTime})})
         .then(async response=>{

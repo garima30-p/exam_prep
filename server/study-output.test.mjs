@@ -27,8 +27,11 @@ it('joins wrapped solved questions and cites the answer without counting it as p
   expect(questions[0].answerSource.excerpt).not.toContain('Exam cue');
 });
 
+const supportingQuote='Mutual exclusion protects the shared resource.';
+const structured=(id='N1',quote=supportingQuote)=>({response:{insufficientEvidence:false,sections:[{text:supportingQuote,citations:[{id,quote}]}]}});
+
 function setup(responses=[true]){
-  const run=vi.fn().mockResolvedValue({response:'SOURCES: N1 W1 N99\nMutual exclusion protects the shared resource.'});
+  const run=vi.fn().mockResolvedValue(structured());
   const charge=vi.fn(async()=>Response.json({allowed:responses.shift()??true}));
   const env={STUDY_AI_ENABLED:'true',AI:{run},STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:charge})}};
   return {env,run,charge};
@@ -42,7 +45,7 @@ it('requires opt-in and refuses exhausted global allowances before calling Gemma
   expect(run).not.toHaveBeenCalled();
   const answer=await (await handle(post('coach',body),env)).json();
   expect(run).toHaveBeenCalledWith(MODEL,expect.objectContaining({
-    max_completion_tokens:300,chat_template_kwargs:{enable_thinking:false},
+    max_completion_tokens:620,response_format:{type:'json_object'},chat_template_kwargs:{enable_thinking:false},
   }));
   expect(answer.sources).toMatchObject([{id:'N1',file:'Notes.pdf',page:7}]);
   expect(answer.sources).toHaveLength(1);
@@ -62,6 +65,7 @@ it('uses Tavily only when permitted and sends only the explicit public topic',as
     expect(search).not.toHaveBeenCalled();
     await handle(post('coach',{...body,mode:'mixed',sources:[{file:'OS.pdf',excerpt:'Mutual exclusion protects the shared resource.'}]}),env);
     expect(search).not.toHaveBeenCalled();
+    run.mockResolvedValueOnce(structured('W1'));
     const answer=await (await handle(post('coach',{...body,mode:'web'}),env)).json();
     expect(answer.sources).toMatchObject([{id:'W1',url:'https://example.edu/concurrency'}]);
     expect(JSON.parse(search.mock.calls[0][1].body)).toMatchObject({query:'mutual exclusion',search_depth:'basic',max_results:3,include_answer:false});
@@ -120,4 +124,65 @@ it('never treats reasoning-only output as an answer and accepts a populated prov
   run.mockResolvedValueOnce({choices:[{message:{content:''}}],response:'Deadlock occurs when processes wait indefinitely for one another.'});
   const valid=await handle(post('coach',{request:'Explain deadlock'}),env);
   expect(await valid.json()).toMatchObject({explanation:'Deadlock occurs when processes wait indefinitely for one another.'});
+});
+
+it('corrects malformed IDs once using only genuine IDs and verbatim evidence',async()=>{
+ const {env,run}=setup();
+ run.mockResolvedValueOnce(structured('N99')).mockResolvedValueOnce(structured());
+ const answer=await handle(post('coach',{request:'Explain mutual exclusion',mode:'notes',
+   sources:[{id:'N99',file:'Actual notes.pdf',page:3,excerpt:supportingQuote}]}),env);
+ expect(answer.status).toBe(200);
+ expect((await answer.json()).sources).toMatchObject([{id:'N1',file:'Actual notes.pdf',page:3}]);
+ expect(run).toHaveBeenCalledTimes(2);
+});
+
+it('rejects unknown IDs and unsupported quotes after one correction',async()=>{
+ for(const response of [structured('N99'),structured('N1','An invented sentence with no supporting passage.')]){
+  const {env,run}=setup();
+  run.mockResolvedValue(response);
+  const result=await handle(post('coach',{request:'Explain mutual exclusion',mode:'notes',
+   sources:[{file:'Actual notes.pdf',page:3,excerpt:supportingQuote}]}),env);
+  expect(result.status).toBe(502);
+  const body=await result.json();
+  expect(body).toMatchObject({code:'citation_validation_failed',requestId:expect.any(String)});
+  expect(body).not.toHaveProperty('sources');
+  expect(run).toHaveBeenCalledTimes(2);
+ }
+});
+
+it('distinguishes relevant-looking notes that do not answer the question',async()=>{
+ const {env,run}=setup();
+ run.mockResolvedValue({response:{insufficientEvidence:true,sections:[]}});
+ const result=await handle(post('coach',{request:'Explain the Bakery algorithm for mutual exclusion',mode:'notes',
+   sources:[{file:'Notes.pdf',excerpt:supportingQuote}]}),env);
+ expect(result.status).toBe(422);
+ expect(await result.json()).toMatchObject({code:'insufficient_evidence'});
+ expect(run).toHaveBeenCalledTimes(1);
+});
+
+it('does not invoke Gemma on administrative text with no available web service',async()=>{
+ const {env,run}=setup();
+ const body={request:'Operating systems revision notes',task:'notes',
+   sources:[{file:'Syllabus.pdf',excerpt:'Course Outcome: Understand operating systems concepts'}]};
+ const strict=await handle(post('coach',{...body,mode:'notes'}),env);
+ expect(await strict.json()).toMatchObject({code:'insufficient_evidence'});
+ const mixed=await handle(post('coach',{...body,mode:'mixed'}),env);
+ expect(await mixed.json()).toMatchObject({code:'web_unavailable'});
+ expect(run).not.toHaveBeenCalled();
+});
+
+it('uses web evidence when matched notes do not answer the question',async()=>{
+ const {env,run}=setup();
+ env.TAVILY_API_KEY='test-secret';
+ run.mockResolvedValueOnce({response:{insufficientEvidence:true,sections:[]}}).mockResolvedValueOnce(structured('W1'));
+ const search=vi.fn(async()=>Response.json({results:[{title:'Source',url:'https://example.edu/bakery',content:supportingQuote}]}));
+ vi.stubGlobal('fetch',search);
+ try{
+  const result=await handle(post('coach',{request:'Explain the Bakery algorithm for mutual exclusion',mode:'mixed',
+   publicTopic:'Bakery algorithm',sources:[{file:'Notes.pdf',excerpt:supportingQuote}]}),env);
+  expect(result.status).toBe(200);
+  expect((await result.json()).sources).toMatchObject([{id:'W1',url:'https://example.edu/bakery'}]);
+  expect(search).toHaveBeenCalledOnce();
+  expect(run).toHaveBeenCalledTimes(2);
+ }finally{vi.unstubAllGlobals();}
 });
