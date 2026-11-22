@@ -3,6 +3,14 @@ import { revise } from './revision';
 
 const text='FIFO evicts the page that arrived earliest. LRU evicts the page whose most recent access was furthest in the past. A hit updates recency in LRU.';
 
+it('does not generate notes from a time-only prompt and administrative syllabus text',()=>{
+  const file={id:1,kind:'Syllabus',file:{name:'OS syllabus.pdf'} as File};
+  const document={id:1,name:'OS syllabus.pdf',total:1,pages:[{number:1,
+    text:'Category of Course: | OC\nCourse Outcome | COI Understand the concept\nProcess Synchronization',
+    method:'ocr' as const,status:'extracted' as const,questions:0,reason:''}]};
+  expect(revise('Only have 10 mins.',[document],[file],'Operating Systems')).toBeNull();
+});
+
 it('extracts the FIFO/LRU contrast with or without a budget',()=>{
   for(const input of [text,'My Operating Systems exam is tomorrow. I have 30 minutes to study. Summarize my notes: '+text]){
     const result=revise(input,[],[],'');

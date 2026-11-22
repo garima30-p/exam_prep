@@ -55,6 +55,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [planGenerated,setPlanGenerated]=useState(false);
   const [revision,setRevision]=useState<Revision|null>(null);
   const [editing,setEditing]=useState(false);
+  const [showQuestions,setShowQuestions]=useState(false);
+  const [aiNote,setAiNote]=useState('');
   const resultHeading=useRef<HTMLHeadingElement>(null);
   useEffect(()=>{if(planGenerated&&!editing){resultHeading.current?.focus();resultHeading.current?.scrollIntoView?.({block:'start'});}},[planGenerated,editing]);
   const [dragging,setDragging]=useState(false);
@@ -65,8 +67,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [elapsed,setElapsed]=useState(0);
   const timeAnchor=useRef(Date.now());
   const [messages,setMessages]=useState<Message[]>([]);
+  const chatLog=useRef<HTMLDivElement>(null);
+  useEffect(()=>{if(chatLog.current)chatLog.current.scrollTop=0;},[messages]);
   const [chat,setChat]=useState('');
   const [generatedCoach,setGeneratedCoach]=useState(false);
+  useEffect(()=>{if(api===demoApi)return;const request=new AbortController();void fetch('/api/coach/status',{signal:request.signal}).then(response=>response.json()).then(data=>setGeneratedCoach(data.available===true)).catch(()=>{});return ()=>request.abort();},[api]);
   const [coachPending,setCoachPending]=useState(false);
   const [sourceMode,setSourceMode]=useState('mixed');
   const [publicTopic,setPublicTopic]=useState('');
@@ -105,6 +110,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const update=<K extends keyof Context,>(key:K,value:Context[K])=>{
     if(key==='minutes')restartBudget();
     setContext(current=>({...current,[key]:value}));
+    if(key!=='minutes' && key!=='familiarity')setPlanGenerated(false);
   };
   async function generate(event?:FormEvent, adjusted=context,mode:'normal'|'retry'|'continue'='normal') {
     event?.preventDefault();
@@ -142,15 +148,26 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
       const summary=extracted??revisionFromAnswer(analysis.questions.find(question=>question.answerSource))
         ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
-      if(!summary&&!analysis.questions.length){
-        setNotice('No study content could be read. Paste a readable passage or replace the attachment.');
+      if(!summary&&(!analysis.questions.length||analysis.questions.every(question=>question.reason.includes('syllabus')))){
+        setNotice('There is not enough explanatory material to generate study notes. Add class notes, a textbook passage, or a solved paper.');
         return;
       }
-      setRevision(summary);setEditing(false);
+      setAiNote('');
+      if(summary&&analysis.generatedCoach&&!sampleMode){
+        try {
+          const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(24000)]),
+            body:JSON.stringify({task:'notes',mode:'notes',minutes:adjusted.minutes,topic:summary.title,
+              request:'Write concise exam notes and a short recall checklist for '+summary.title+'. Use at most 250 words.',
+              sources:summary.passages})});
+          const data=await response.json() as {explanation?:string};
+          if(response.ok&&data.explanation)setAiNote(data.explanation.trim().split(/\s+/).slice(0,250).join(' '));
+        }catch{run.signal.throwIfAborted();}
+      }
+      setRevision(summary);setEditing(false);setShowQuestions(false);
       run.signal.throwIfAborted();
       setResult(analysis.questions);setWarnings(analysis.warnings);setGeneratedCoach(Boolean(analysis.generatedCoach));
       setOptimization(analysis.optimization?{data:analysis.optimization,context:adjusted}:null);
-      setProgress({});restartBudget();setLimit(10);setMessages([]);lastCoachQuestion.current=undefined;setPlanGenerated(true); }
+      setProgress({});restartBudget();setLimit(10);lastCoachQuestion.current=undefined;setPlanGenerated(true); }
     catch(error) { setNotice(run.signal.aborted?'Processing cancelled. Run again to resume from usable pages.':error instanceof Error?error.message:'The study plan could not load. Try again.'); }
     finally {controller.current=null;setProcessingMessage('');setBusy(false);}
   }
@@ -321,22 +338,22 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </div></header>
     <main id="main" className={'wrap '+(planGenerated?'workspace':'landing')}>
       <ThemeHero {...theme}/>
-      {planGenerated&&!editing?<button className="secondary" onClick={()=>setEditing(true)}>Edit input</button>:<section aria-label="Exam setup" className="setup">
-        <form onSubmit={generate} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
+      <section aria-label="Exam setup" className="setup">
+        <form onSubmit={event=>{if(!planGenerated){void generate(event);return;}event.preventDefault();if(editing)setEditing(false);else resultHeading.current?.scrollIntoView?.({block:'start'});}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
           <label htmlFor="prompt">Paste notes or add a file</label>
           <textarea id="prompt" value={prompt} disabled={busy} onChange={e=>editPrompt(e.target.value)} placeholder="Paste a passage, or describe what you want to revise" rows={3} maxLength={8000}/>
           {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
-            <button className="primary" disabled={busy} type="submit">{busy?'Summarizing…':'Summarize'}</button>
+            <button className="primary" disabled={busy} type="submit">{busy?'Generating notes…':planGenerated?'Notes are generated ↓':'Generate Notes'}</button>
           </div>
         </form>
         {notice && <p role="alert" className="notice">{notice}</p>}
         {hasContext && <details><summary>Edit details</summary><fieldset className="context" disabled={busy}><legend>Plan settings</legend>
           <label>Exam<input value={context.subject} placeholder="Subject" onChange={e=>update('subject',e.target.value)}/></label>
           <label>Date<input value={context.date} placeholder="Exam date" onChange={e=>update('date',e.target.value)}/></label>
-          <label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))))}/></label>
+          <label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>{update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))));setPlanGenerated(false);}}/></label>
           <label>Pass mark<input value={context.pass} placeholder="Optional" onChange={e=>update('pass',e.target.value)}/></label>
           <label>Paper rules<input value={context.pattern} placeholder="Optional" onChange={e=>update('pattern',e.target.value)}/></label>
           {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
@@ -348,42 +365,54 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </div>}
         {!sampleMode&&activeApi.prepare&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
         {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(undefined,context,'retry')}>Retry unread files</button>}
-      </section>}
-      {result && planGenerated && <section className="results" aria-labelledby="results-title">
-        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>{revision?.title??'Past-paper questions'}</h2></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
+      </section>
+      {result && planGenerated && !editing && <section className="results" aria-labelledby="results-title">
+        <div className="result-top"><div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read{context.subject?' — '+context.subject:''}</h2><button className="link" onClick={()=>setEditing(true)} aria-label="Collapse notes">↑</button></div><div className="study-actions"><DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={reset}>Start over</button></div></div>
         <div className="summary">{pack.context.map(value=><span key={value}>{value}</span>)}</div>
-        {revision?<article className="study-note" aria-label="Revision summary">
-          {revision.passages.map((source,index)=><p key={index}>{source.excerpt}{' '}<button className="link accent" onClick={()=>open(null,source)}>{sourceLabel(source)}</button></p>)}
-          <p><strong>Recall:</strong> {revision.recall}</p>
+        {revision?<article className="study-note" aria-label="Revision notes">
+          <h3>{revision.title}</h3>
+          {aiNote&&<div><strong>AI-generated · Not source-verified</strong><p>{aiNote}</p></div>}
+          {!aiNote&&revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
+          <details><summary>Uploaded evidence</summary>{[...new Map(revision.passages.map(source=>[source.file+':'+source.page,source])).values()]
+            .map(source=><button className="link accent source" key={sourceLabel(source)} onClick={()=>open(null,source)}>{sourceLabel(source)}</button>)}</details>
+          <p><strong>Remember before the exam:</strong> {revision.recall}</p>
           <details key={revision.answer}><summary>Show answer</summary><p>{revision.answer}</p></details>
         </article>:<article className="study-note"><p>These are questions found in the material. They show what was asked, but no supporting answer was found.</p>
           {result.slice(0,3).map(question=><div key={question.id}><p>{question.prompt}</p><button className="link accent" onClick={()=>open(null,question.source)}>{sourceLabel(question.source)}</button></div>)}
         </article>}
         {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
-        <details className="study-output" open={sampleMode||undefined}><summary>More study tools</summary>
+        <button className="secondary" onClick={()=>setShowQuestions(true)} disabled={showQuestions}>Generate Questions</button>
+        <details className="study-output" open={showQuestions||undefined}><summary>More study tools</summary>
         <StudyOutput pack={pack} openSource={reference=>open(null,reference)} ask={question=>{
           send('Explain '+question.topic,question);
           document.getElementById('study-coach-title')?.scrollIntoView?.({block:'nearest'});
         }}/>
         <div className="result-grid"><section aria-labelledby="important-questions">
-          {(visible.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
+          {showQuestions&&(visible.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
 
-          {visible.map((question,index)=>renderQuestion(question,index))}
-          {limit<fitted.length && <button className="secondary" onClick={()=>send('Show next 10')}>Show next 10</button>}
-          {tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
-        </section><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3><div className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:messages.map((m,i)=><div key={i}><strong>{m.role}</strong>{m.generated&&<span className="badge">AI-generated · Not source-verified</span>}<p>{m.text}</p>
-          {Boolean(m.references?.length)&&<details><summary>References used</summary>{m.references?.map(reference=>reference.kind==='uploaded'
-            ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>Uploaded Source · {sourceLabel(reference)}</button>
-            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">Web Source · {reference.title} · {new URL(reference.url).hostname}</a>)}</details>}{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div>{!sampleMode&&<div className="study-output"><label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
-          {sourceMode!=='notes'&&generatedCoach&&<label>Public topic for web search<input value={publicTopic} maxLength={100} placeholder="e.g. deadlock avoidance" onChange={event=>setPublicTopic(event.target.value)}/></label>}
-          <small>{generatedCoach?'Relevant excerpts may be sent to Cloudflare Workers AI. Only the public topic field is sent to web search.':'AI generation is unavailable. Source-backed study tools still work.'}</small>
-          {generatedCoach&&fitted.length>0&&<button className="secondary" disabled={coachPending} onClick={()=>send('Generate revision notes for: '+fitted.slice(0,remainingTime<=15?2:4).map(question=>question.topic).join(', '))}>Generate AI revision notes</button>}</div>}
-          <form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button></form></aside></div>
+          {showQuestions&&(visible.length?visible:context.minutes?[]:result.slice(0,10)).map((question,index)=>renderQuestion(question,index))}
+          {showQuestions&&!visible.length&&revision&&<article className="question">
+            <p>Practice question · based on your study material</p><h3>{revision.recall}</h3>
+            <details><summary>Show answer</summary><p>{revision.answer}</p></details>
+            <button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button>
+          </article>}
+          {showQuestions&&!visible.length&&!revision&&<p>No supported questions fit this plan.</p>}
+          {showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>send('Show next 10')}>Show next 10</button>}
+          {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
+        </section></div>
           {result.length>0&&pack.warnings.length>0&&<div className="coverage"><h3>Sources and Coverage</h3>
             <ul className="notice">{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>
           </div>}
         </details>
       </section>}
+      <section className="study-output" aria-label="Study Coach"><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3>{!sampleMode&&<div className="study-output"><label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
+          {sourceMode!=='notes'&&generatedCoach&&<label>Public topic for web search<input value={publicTopic} maxLength={100} placeholder="e.g. deadlock avoidance" onChange={event=>setPublicTopic(event.target.value)}/></label>}
+          <small>{generatedCoach?'Relevant excerpts may be sent to Cloudflare Workers AI. Only the public topic field is sent to web search.':'AI generation is unavailable. Source-backed study tools still work.'}</small>
+          {generatedCoach&&fitted.length>0&&<button className="secondary" disabled={coachPending} onClick={()=>send('Generate revision notes for: '+fitted.slice(0,remainingTime<=15?2:4).map(question=>question.topic).join(', '))}>Generate AI revision notes</button>}</div>}
+          <form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button></form><div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:Array.from({length:Math.ceil(messages.length/2)},(_,index)=>messages.slice(index*2,index*2+2)).reverse().flat().map((m,i)=><div key={i}><strong>{m.role}</strong>{m.generated&&<span className="badge">AI-generated · Not source-verified</span>}<p>{m.text}</p>
+          {Boolean(m.references?.length)&&<details><summary>References used</summary>{m.references?.map(reference=>reference.kind==='uploaded'
+            ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>Uploaded Source · {sourceLabel(reference)}</button>
+            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">Web Source · {reference.title} · {new URL(reference.url).hostname}</a>)}</details>}{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div></aside></section>
     </main>
     <footer className="wrap footer"><nav aria-label="Product information"><button className="link" onClick={()=>open('pricing')}>Plans</button><button className="link" onClick={()=>open('privacy')}>Privacy</button><button className="link" onClick={()=>open('terms')}>Terms</button></nav></footer>
     <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>

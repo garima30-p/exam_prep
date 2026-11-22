@@ -1,4 +1,5 @@
 import { coachEnabled, generateStudyReply } from './study-ai.mjs';
+import { administrativeLine } from './study-material.mjs';
 import { describeLearning, makeLearningPlan } from './learning.mjs';
 import { exactQuestionKey } from './semantic.mjs';
 import { initialMinutes, scorePriority } from './evidence.mjs';
@@ -49,6 +50,7 @@ function candidates(materials) {
       const lines = materialLines(page.text,material.kind);
       for (let n=0; n<lines.length; n++) {
         const line = compact(lines[n]);
+        if(administrativeLine(line))continue;
         const sectionHeading=line.match(/^section\s+([a-z]|[ivx]+|\d+)\b/i);
         if(sectionHeading) {section=sectionHeading[1].toUpperCase();continue;}
         const heading = line.match(/^unit\s+([1-9][0-9]?|i{1,3}|iv|v|vi{1,3}|ix|x)\b\s*[-–:.]?\s*(.*)/i);
@@ -108,7 +110,7 @@ export function buildPlan(materials) {
       const lines=materialLines(page.text,material.kind);
       for (const [lineIndex,line] of lines.entries()) {
         if (++totalLines>5000) break;
-        if(boilerplate.test(compact(line)))continue;
+        if(boilerplate.test(compact(line))||administrativeLine(line))continue;
         const cue=readQuestionCue(compact(line));
         if(cue && material.kind==='Notes') {
           const answer=[];
@@ -225,6 +227,7 @@ export async function handle(request,env) {
   const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
   const json=(data,status=200)=>Response.json(data,{status,headers});
   const path=new URL(request.url).pathname;
+  if(path==='/api/coach/status'&&request.method==='GET')return json({available:coachEnabled(env)});
   if (path==='/api/health' && request.method==='GET') return json({status:'ok'});
   if (path!=='/api/analyze' && path!=='/api/coach') return json({error:'Endpoint not found.'},404);
   if (path==='/api/coach'&&!coachEnabled(env))return json({error:'Generated explanations are disabled.'},503);

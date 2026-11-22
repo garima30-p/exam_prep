@@ -22,10 +22,10 @@ it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary 
       prompt.dispatchEvent(new Event('input',{bubbles:true}));
     });
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    expect(document.activeElement?.textContent).toBe('FIFO vs. LRU');
-    expect(host.querySelector('[aria-label="Revision summary"]')?.textContent).toContain('A hit updates recency in LRU.');
-    expect(host.querySelector('[aria-label="Revision summary"] details')?.textContent).toContain('Show answer');
-    expect(host.querySelector('.composer')).toBeNull();
+    expect(document.activeElement?.id).toBe('results-title');
+    expect(host.querySelector('[aria-label="Revision notes"]')?.textContent).toContain('A hit updates recency in LRU.');
+    expect([...host.querySelectorAll('[aria-label="Revision notes"] details summary')].map(node=>node.textContent)).toContain('Show answer');
+    expect(host.querySelector('.composer')).not.toBeNull();
     expect(host.textContent?.includes('Start here:')).toBe(Boolean(prefix));
   }finally{
     await act(async()=>root.unmount());
@@ -55,9 +55,11 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('#time')!,'5 hours'));
     await act(async()=>host.querySelector('#time')!.closest('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
     await act(async()=>{await new Promise(resolve=>setTimeout(resolve,460));});
+    expect(host.querySelectorAll('.question')).toHaveLength(0);
+    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
     expect(host.querySelectorAll('.question')).toHaveLength(10);
     expect(document.activeElement?.id).toBe('results-title');
-    expect(host.querySelector('.composer button[type=submit]')).toBeNull();
+    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Notes are generated ↓');
     await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Ask why?')!.click());
     expect(host.querySelector('[role=log]')?.textContent).toContain('page 1, Q1');
     await act(async()=>setValue(host.querySelector<HTMLInputElement>('[aria-label="Ask about your plan"]')!,'Only 30 minutes left'));
@@ -66,10 +68,10 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(host.querySelectorAll('.question').length).toBeGreaterThan(0);
     const allocations=[...host.querySelectorAll('.study-timeline strong')].map(item=>parseInt(item.textContent??'0',10));
     expect(allocations.reduce((sum,item)=>sum+item,0)).toBeLessThanOrEqual(30);
-    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Edit input')!.click());
+    expect(host.querySelector('[role=log]')?.textContent?.indexOf('Only 30 minutes left')).toBeLessThan(host.querySelector('[role=log]')?.textContent?.indexOf('Why #1?')??0);
     await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. I have two hours.'));
     expect(host.querySelector('#results-title')).toBeNull();
-    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Summarize');
+    expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Generate Notes');
   } finally {
     await act(async()=>root.unmount());
     host.remove();
@@ -104,6 +106,7 @@ it('reoptimizes real plan candidates on chat without reanalyzing their sources',
     await act(async()=>root.render(<App api={api}/>));
     await act(async()=>input('textarea','My DBMS exam is tomorrow. I have 67 minutes.'));
     await act(async()=>submit('.composer'));
+    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
     expect([...host.querySelectorAll('.question h3')].map(item=>item.textContent)).toEqual(questions.slice(1).map(q=>q.prompt));
     await act(async()=>input('[aria-label="Ask about your plan"]','I only have 45 minutes now.'));
     await act(async()=>submit('.coach form'));
