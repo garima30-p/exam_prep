@@ -29,6 +29,12 @@ type Page = 'pricing'|'privacy'|'terms';
 type PreparationMode = 'last-minute'|'study';
 type BookContent = {text:string;references:CoachSource[];webLimited:boolean};
 const studyTimes=[[5,'5 minutes'],[15,'15 minutes'],[30,'30 minutes'],[60,'1 hour']] as const;
+
+function practiceSeed(id:number,topic:string,answerSource?:Source):Question {
+  return {id,topic,prompt:'What are the key points to remember about '+topic+'?',minutes:0,marks:0,unit:0,
+    reason:'Based on your current study topic',answer:'',practiceSeed:true,answerSource,
+    source:answerSource??{file:'',page:0,number:'',excerpt:''},sources:answerSource?[answerSource]:[]};
+}
 type CoachSource = (Source & {kind:'uploaded';id:string}) | {kind:'web';id:string;title:string;url:string};
 type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subject:string;topics:string[];studyPage?:{title:string;text:string};
   history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
@@ -106,6 +112,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [revision,setRevision]=useState<Revision|null>(null);
   const [editing,setEditing]=useState(false);
   const [showQuestions,setShowQuestions]=useState(false);
+  const questionsHeading=useRef<HTMLHeadingElement>(null);
+  useEffect(()=>{
+    if(!showQuestions)return;
+    questionsHeading.current?.focus({preventScroll:true});
+    questionsHeading.current?.scrollIntoView?.({block:'start'});
+  },[showQuestions]);
   const [aiNote,setAiNote]=useState('');
   const [aiReferences,setAiReferences]=useState<CoachSource[]>([]);
   const [coachPage,setCoachPage]=useState(()=>typeof location!=='undefined'&&location.hash==='#study-coach');
@@ -118,6 +130,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [optimization,setOptimization]=useState<{data:NonNullable<Analysis['optimization']>}|null>(null);
   const [preparedScope,setPreparedScope]=useState<PreparationScope|null>(null);
   const [practice,setPractice]=useState<Record<number,string>>({});
+  const [practiceUnavailable,setPracticeUnavailable]=useState<Record<number,boolean>>({});
   const [practicePending,setPracticePending]=useState(false);
   const practiceRun=useRef<AbortController|null>(null);
   const analyzed=useRef<{key:string;analysis:Analysis}|null>(null);
@@ -274,7 +287,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
       if(!cached){
         if(!sampleMode)analyzed.current={key:analysisKey,analysis};
-        practiceRun.current?.abort();setPracticePending(false);setPractice({});setQuestionAnswers({});
+        practiceRun.current?.abort();setPracticePending(false);setPractice({});setPracticeUnavailable({});setQuestionAnswers({});
       }
       if(studying){
         const fallback=requestedTopic?[requestedTopic]:extracted?[extracted.title]:inspected.topics.length?inspected.topics:[adjusted.subject].filter(Boolean);
@@ -339,7 +352,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     ? plan.selectedQuestionIds.map(id=>optimization.data.candidates.find(question=>question.id===id)!)
     : fitQuestions(result ?? [],context.minutes);
   const visible=(remainingTime||context.minutes?fitted:result??[]).slice(0,limit);
-  const questionList=!sampleMode?(preparedScope?.questions??[]).filter(question=>!question.practiceSeed||Boolean(practice[question.id])).map(question=>practice[question.id]?{...question,prompt:practice[question.id]}:question):visible.length?visible:(result??[]).slice(0,limit);
+  const summaryTopic=revision?.title&&revision.title!=='Key points'?revision.title:studyTopic(prompt)||context.subject||'this revision topic';
+  const lastMinuteQuestions=preparedScope?.questions.length?preparedScope.questions:
+    planGenerated?[practiceSeed(2000,summaryTopic,revision?.passages[0])]:[];
+  const bookQuestions=activeBookPage?(activeBookPage.questions.length?activeBookPage.questions:
+    [practiceSeed(3000+bookIndex,activeBookPage.title,activeBookPage.passages[0])]):[];
+  const availableQuestions=(questions:readonly Question[])=>questions.flatMap(question=>
+    practice[question.id]?[{...question,prompt:practice[question.id]}]:
+      practiceUnavailable[question.id]?[{...question,prompt:practiceSeed(question.id,question.topic).prompt}]:
+      !question.practiceSeed||sampleMode?[question]:[]);
+  const questionList=!sampleMode?availableQuestions(lastMinuteQuestions):visible.length?visible:(result??[]).slice(0,limit);
   const questionsOutsideBudget=Boolean(!sampleMode&&!preparedScope?.review&&!visible.length&&questionList.length);
   const plannedIds=new Set(fitted.map(question=>question.id));
   const tracked=optimization?.data.candidates.filter(question=>!plannedIds.has(question.id)&&progress[question.id])??[];
@@ -470,16 +492,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   async function revealQuestions(){
     setShowQuestions(true);
-    await preparePractice(preparedScope?.questions??[]);
+    await preparePractice(lastMinuteQuestions);
   }
-  async function preparePractice(questions:readonly Question[]){
+  async function preparePractice(questions:readonly Question[],retry=false){
     if(sampleMode||practiceRun.current)return;
-    const candidates=questions.filter(question=>!practice[question.id]&&question.practiceSeed&&!question.historical&&
+    const candidates=questions.filter(question=>!practice[question.id]&&(retry||!practiceUnavailable[question.id])&&question.practiceSeed&&!question.historical&&
       !question.historicalFrequency&&!(question.sources??[question.source]).some(source=>files.some(file=>file.id===source.documentIndex&&file.kind==='Past paper')));
     if(!candidates.length)return;
     const operation=new AbortController();
     practiceRun.current=operation;
     setPracticePending(true);
+    let generated:Record<number,string>={};
     try{
       const r=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
         signal:AbortSignal.any([operation.signal,AbortSignal.timeout(20000)]),
@@ -489,14 +512,21 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         const allowed=new Set(candidates.map(question=>question.id));
         const key=(value:string)=>value.trim().toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
         const used=new Set(questions.filter(question=>!allowed.has(question.id)).map(question=>key(question.prompt)));
-        const generated=Object.fromEntries(data.questions.flatMap(question=>{
+        generated=Object.fromEntries(data.questions.flatMap(question=>{
           if(!allowed.has(question.id)||typeof question.prompt!=='string'||used.has(key(question.prompt)))return [];
           used.add(key(question.prompt));return [[question.id,question.prompt]];
         }));
-        setPractice(current=>({...current,...generated}));
       }
-    }catch{/* Keep historical questions available if practice generation fails. */}
-    finally{if(practiceRun.current===operation){practiceRun.current=null;setPracticePending(false);}}
+    }catch{/* The recall questions remain available when AI practice fails. */}
+    finally{
+      if(practiceRun.current===operation){
+        practiceRun.current=null;setPracticePending(false);
+        if(!operation.signal.aborted){
+          setPractice(current=>({...current,...generated}));
+          setPracticeUnavailable(current=>({...current,...Object.fromEntries(candidates.map(question=>[question.id,!generated[question.id]]))}));
+        }
+      }
+    }
   }
   async function loadQuestionAnswer(question:Question,key:string){
     if(pendingAnswers.current.has(key)||questionAnswers[key]?.text)return;
@@ -522,7 +552,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const answer=questionAnswers[answerKey];
     return <article className="question" key={q.id}>
       <div className="question-meta">{index!==undefined&&<span className="rank">#{index+1}</span>}<span>{q.topic}{q.unit?' · Unit '+q.unit:''}</span><span className="spacer"/><span>{mode==='study'?'':allocation?allocation+' min'+(shortReview?' quick review':''):'Reference'}{q.marks?' · '+q.marks+' marks':''}</span></div>
-      <h3>{q.prompt}</h3><p>{q.historical?'Previous-Year Question'+(q.examYears?.length?' · '+q.examYears.join(', '):'')+' · ':q.sources?.some(source=>documents.some(doc=>doc.id===source.documentIndex&&files.some(file=>file.id===doc.id&&file.kind==='Past paper')))?'Uploaded past-paper question · ':practice[q.id]?'AI-Generated Practice Question · ':'Practice question · '}{q.reason}.</p>
+      <h3>{q.prompt}</h3><p>{q.historical?'Previous-Year Question'+(q.examYears?.length?' · '+q.examYears.join(', '):'')+' · ':q.sources?.some(source=>documents.some(doc=>doc.id===source.documentIndex&&files.some(file=>file.id===doc.id&&file.kind==='Past paper')))?'Uploaded past-paper question · ':practice[q.id]?'AI-Generated Practice Question · ':q.practiceSeed?'Recall practice · ':'Practice question · '}{q.reason}.</p>
       {!sampleMode&&<details className="checkpoints" onToggle={event=>{if(event.currentTarget.open&&!answer)void loadQuestionAnswer(q,answerKey);}}>
         <summary>View Answer ↓</summary>
         {answer?.pending&&<p role="status">Preparing answer…</p>}
@@ -581,8 +611,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   const hasContext=Boolean(prompt.trim() || files.length);
   const activeBookContent=activeBookPage?bookContent[activeBookPage.id]:undefined;
-  const studyPageQuestions=activeBookPage?.questions.flatMap(question=>question.practiceSeed&&!practice[question.id]&&!book?.demo?[]:
-    [practice[question.id]?{...question,prompt:practice[question.id]}:question])??[];
+  const studyPageQuestions=availableQuestions(bookQuestions);
+  function practiceRetry(questions:readonly Question[]){
+    if(practicePending||!questions.some(question=>practiceUnavailable[question.id]&&!practice[question.id]))return null;
+    return <p className="notice">AI practice questions are unavailable. You can use the recall questions below.{' '}
+      <button type="button" className="link accent" onClick={()=>void preparePractice(questions,true)}>Retry AI questions</button>
+    </p>;
+  }
   const modeButtons=(label:string)=><nav className="preparation-modes" aria-label={label}>
     <button type="button" aria-pressed={mode==='last-minute'&&!coachPage} onClick={()=>selectMode('last-minute')}>Last Minute</button>
     <button type="button" aria-pressed={mode==='study'&&!coachPage} onClick={()=>selectMode('study')}>Study</button>
@@ -669,15 +704,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </article>}
         {documents.some(document=>!documentComplete(document))&&<p className="notice">Unreadable or unverified pages were excluded from the summary.</p>}
         {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
-        <button className="secondary" onClick={()=>void revealQuestions()} disabled={showQuestions}>{practicePending?'Preparing practice questions…':'Generate Questions'}</button>
+        <button className="secondary" onClick={()=>void revealQuestions()} disabled={showQuestions}>{practicePending?'Preparing practice questions…':showQuestions?'Questions shown':'Generate Questions'}</button>
         <details className="study-output" open={showQuestions||undefined}><summary>More study tools</summary>
         {pack.timeline.length>0&&<details><summary>Time breakdown</summary><ol className="study-timeline">
           {pack.timeline.map((item,index)=><li key={index}>{item.title} <strong>{item.minutes} min</strong></li>)}
         </ol></details>}
         <div className="result-grid"><section aria-labelledby="important-questions">
-          {showQuestions&&(questionList.length>0||tracked.length>0)&&<h3 id="important-questions">Important Questions</h3>}
+          {showQuestions&&<h3 id="important-questions" ref={questionsHeading} tabIndex={-1}>Important Questions</h3>}
+          {showQuestions&&practicePending&&<p role="status">Preparing practice questions…</p>}
 
           {showQuestions&&questionsOutsideBudget&&<p>These questions are available for reference. None fits the remaining preparation budget.</p>}
+          {showQuestions&&practiceRetry(lastMinuteQuestions)}
           {showQuestions&&questionList.map((question,index)=>renderQuestion(question,index))}
           {showQuestions&&!practicePending&&!questionList.length&&revision&&<article className="question">
             <p>Practice question · based on your study material</p><h3>{revision.recall}</h3>
@@ -710,8 +747,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
               ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>
               :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}
           </details>}
-          {activeBookPage.questions.length>0&&<details key={activeBookPage.id} onToggle={event=>{if(event.currentTarget.open)void preparePractice(activeBookPage.questions);}}>
-            <summary>Practice questions</summary>
+          {bookQuestions.length>0&&<details key={activeBookPage.id} onToggle={event=>{if(event.currentTarget.open)void preparePractice(bookQuestions);}}>
+            <summary>Generate Questions</summary>
+            {practiceRetry(bookQuestions)}
             {studyPageQuestions.map((question,index)=>renderQuestion(question,index))}
             {practicePending&&<p role="status">Preparing practice questions…</p>}
             {!practicePending&&!studyPageQuestions.length&&<p>No reliable practice questions are available for this page.</p>}

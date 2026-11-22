@@ -63,7 +63,7 @@ it('asks for study time, then shows a plan and answers a contextual question', a
     expect(host.querySelectorAll('.question')).toHaveLength(0);
     await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
     expect(host.querySelectorAll('.question')).toHaveLength(10);
-    expect(document.activeElement?.id).toBe('results-title');
+    expect(document.activeElement?.id).toBe('important-questions');
     expect(host.querySelector('.composer button[type=submit]')?.textContent).toBe('Summary generated ↓');
     expect(host.querySelector('.coach')).toBeNull();
     await act(async()=>host.querySelector<HTMLAnchorElement>('a[href="#study-coach"]')!.click());
@@ -219,6 +219,51 @@ it('generates study pages on demand and keeps page position and analysis across 
     expect(host.querySelector('.summary')?.textContent).toContain('15 min available');
     expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
     expect(api.analyze).toHaveBeenCalledTimes(1);
+  }finally{
+    await act(async()=>root.unmount());
+    host.remove();vi.unstubAllGlobals();history.replaceState(null,'',location.pathname);
+  }
+});
+
+it('offers questions on a prompt-only Study page and lets users retry failed practice generation',async()=>{
+  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
+  const host=document.createElement('div');document.body.append(host);
+  const root=createRoot(host);
+  const api:ExamApi={...demoApi,analyze:async()=>({questions:[],warnings:[]})};
+  let practiceCalls=0;
+  vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{
+    const request=JSON.parse(init.body);
+    if(request.task==='practice'){
+      practiceCalls++;
+      return practiceCalls===1?Response.json({code:'usage_limit'},{status:429}):
+        Response.json({questions:[{id:request.priorities[0].id,prompt:'How can a circular wait lead to deadlock?'}]});
+    }
+    return Response.json({explanation:'Deadlock occurs when processes wait indefinitely for one another.',sources:[]});
+  }));
+  const button=(label:string)=>[...host.querySelectorAll('button')].find(item=>item.textContent===label)!;
+  try{
+    await act(async()=>root.render(<App api={api}/>));
+    await act(async()=>button('Study').click());
+    await act(async()=>{
+      const input=host.querySelector('textarea')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Teach me about deadlock.');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+    await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    const details=[...host.querySelectorAll('details')].find(item=>item.querySelector('summary')?.textContent==='Generate Questions')!;
+    await act(async()=>{details.querySelector('summary')!.click();await new Promise(resolve=>setTimeout(resolve,25));});
+    expect(host.querySelector('.question h3')?.textContent).toBe('What are the key points to remember about deadlock?');
+    expect(host.querySelector('.question .source')).toBeNull();
+    await act(async()=>button('Retry AI questions').click());
+    expect(host.querySelector('.question h3')?.textContent).toBe('How can a circular wait lead to deadlock?');
+    expect(host.querySelector('.question')?.textContent).toContain('AI-Generated Practice Question');
+    expect(practiceCalls).toBe(2);
+    await act(async()=>button('Last Minute').click());
+    await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+    await act(async()=>button('5 minutes').click());
+    await act(async()=>button('Generate Questions').click());
+    expect(host.querySelector('.question h3')?.textContent).toBe('How can a circular wait lead to deadlock?');
+    expect(practiceCalls).toBe(3);
   }finally{
     await act(async()=>root.unmount());
     host.remove();vi.unstubAllGlobals();history.replaceState(null,'',location.pathname);
