@@ -6,7 +6,7 @@ import type { Analysis, Context, ExamApi, Material, Question, Source } from './a
 import { familiarityFrom, makeLearningPlan } from '../server/learning.mjs';
 import type { CheckpointState, Progress } from '../server/learning.mjs';
 import { countQuestions } from '../server/page-text.mjs';
-import { documentComplete } from './document-state';
+import { documentComplete, isTrusted } from './document-state';
 import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
 import { acceptedDocuments, documentFormat, documentLocation, originalDocumentLink } from './document-formats';
@@ -21,7 +21,8 @@ const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
 const preparationLabels={completed:'Checkpoints completed',revision:'Needs revision','in-progress':'In progress','not-started':'Not started'};
 type Page = 'pricing'|'privacy'|'terms';
-type Message = {role:'You'|'Demo coach'|'Study coach'; text:string; source?:Source};
+type CoachSource = (Source & {kind:'uploaded';id:string}) | {kind:'web';id:string;title:string;url:string};
+type Message = {role:'You'|'Demo coach'|'Study coach'; text:string; source?:Source; references?:CoachSource[]; generated?:boolean};
 
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'}) {
   const paths = {
@@ -67,6 +68,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [chat,setChat]=useState('');
   const [generatedCoach,setGeneratedCoach]=useState(false);
   const [coachPending,setCoachPending]=useState(false);
+  const [sourceMode,setSourceMode]=useState('mixed');
+  const [publicTopic,setPublicTopic]=useState('');
   const lastCoachQuestion=useRef<Question | undefined>(undefined);
   const [limit,setLimit]=useState(10);
   const [page,setPage]=useState<Page|null>(null);
@@ -183,6 +186,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     let reply:string;
     let answerSource:Source|null|undefined;
     let generateFor:Question|undefined;
+    let useGemma=false;
     if(minutes && /\b(left|remaining|replan|have|time to study|can study)\b/i.test(text)) {
       update('minutes',minutes);setLimit(10);
       if(familiarity!=='unknown')update('familiarity',familiarity);
@@ -219,26 +223,42 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           reply='From your materials · '+selected.topic+'\n'+answerLines(selected,false,focused).join('\n')+
             (/\bmarks?\b/i.test(text)?'\nUse these points to structure your answer. The material does not establish a marking rubric.':'');
         }
-        if(generatedCoach&&selected&&(!excerpt||/\b(example|simpler)\b/i.test(text))&&!coachPending) generateFor=selected;
+        generateFor=selected;
       } else reply=activeApi.chat(text,target?[{...target,id:visible.indexOf(target)+1}]:ranked);
+      useGemma=generatedCoach&&!sampleMode&&!coachPending;
+      generateFor??=selected;
       if(target && marks && sampleMode) {
         const sentences=target.answer.match(/[^.!?]+[.!?]*/g) ?? [target.answer];
         reply='Sample '+marks+'-mark outline · '+target.topic+'\n'+(marks===2?sentences.slice(0,2).join('').trim():target.answer);
         if(marks===10) reply+='\nFor a longer response, define the terms and develop a worked example.';
       }
     }
-    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:generateFor?'Preparing an explanation…':reply,source:answerSource??undefined};
+    const message:Message={role:sampleMode?'Demo coach':'Study coach',text:useGemma?(sourceMode==='notes'?'Preparing an explanation…':'Checking sources and preparing an explanation…'):reply,source:answerSource??undefined};
     setMessages(current=>[...current,{role:'You',text},message]);setChat('');
-    if(generateFor){
+    if(useGemma){
       setCoachPending(true);
-      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(15000),
-        body:JSON.stringify({subject:context.subject,question:generateFor.prompt,request:text,evidence:generateFor.answerSource?.excerpt})})
+      const task=/^Generate revision notes/.test(text)?'notes':/\bexample\b/i.test(text)?'example':
+        /\bmarks?\b/i.test(text)?'exam':/\bsimpler\b/i.test(text)?'quick':generateFor?'coach':'chat';
+      const query=new Set((text+' '+(generateFor?.topic??'')).toLowerCase().match(/[a-z]{4,}/g)??[]);
+      const retrieved=documents.flatMap(document=>{
+        if(files.find(file=>file.id===document.id)?.kind==='Past paper')return [];
+        return document.pages.filter(isTrusted).flatMap(page=>page.text.split(/\n+/).map((line,index)=>({
+          file:document.name,page:page.number,number:'Line '+(index+1),documentIndex:document.id,excerpt:line.trim().slice(0,650),
+        })));
+      }).map(source=>({source,score:[...new Set(source.excerpt.toLowerCase().match(/[a-z]{4,}/g)??[])].filter(word=>query.has(word)).length}))
+        .filter(match=>match.score>0).sort((a,b)=>b.score-a.score).slice(0,6).map(match=>match.source);
+      const sources=[generateFor?.answerSource,...retrieved,...(revision?.passages??[]),...fitted.map(question=>question.answerSource)].filter(Boolean);
+      const distinct=[...new Map(sources.map(source=>[source!.excerpt,source])).values()].slice(0,12);
+      const history=messages.slice(-4).map(item=>({role:item.role==='You'?'user':'assistant',content:item.text}));
+      void fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(24000),
+        body:JSON.stringify({request:text,topic:generateFor?.topic,task,mode:sourceMode,publicTopic,
+          history,sources:distinct,minutes:remainingTime})})
         .then(async response=>{
-          const data=await response.json() as {explanation?:string;error?:string};
+          const data=await response.json() as {explanation?:string;error?:string;sources?:CoachSource[];webStatus?:string};
           if(!response.ok||!data.explanation)throw new Error(data.error||'Generated explanation unavailable.');
-          return 'Generated explanation · verify against your materials\n'+data.explanation;
-        }).catch(error=>reply+'\n'+(error instanceof Error&&error.name==='Error'?error.message:'Generated explanation unavailable.'))
-        .then(text=>setMessages(current=>current.map(item=>item===message?{...item,text}:item)))
+          return {...message,text:[data.explanation,data.webStatus].filter(Boolean).join('\n\n'),generated:true,references:data.sources,source:undefined};
+        }).catch(error=>({...message,text:reply+'\n'+(error instanceof Error&&error.name==='Error'?error.message:'Generated explanation unavailable.')}))
+        .then(updated=>setMessages(current=>current.map(item=>item===message?updated:item)))
         .finally(()=>setCoachPending(false));
     }
   }
@@ -351,7 +371,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           {visible.map((question,index)=>renderQuestion(question,index))}
           {limit<fitted.length && <button className="secondary" onClick={()=>send('Show next 10')}>Show next 10</button>}
           {tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
-        </section><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3><div className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:messages.map((m,i)=><div key={i}><strong>{m.role}</strong><p>{m.text}</p>{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div><form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()}><Icon name="send"/></button></form></aside></div>
+        </section><aside className="coach" aria-label="Contextual chat"><h3 id="study-coach-title"><Icon name="spark"/> Study coach {sampleMode&&<span className="badge">Demo</span>}</h3><div className="messages" role="log" aria-label="Chat messages" tabIndex={0}>{messages.length===0?<p>Ask about a question, check unit coverage, or change your study time.</p>:messages.map((m,i)=><div key={i}><strong>{m.role}</strong>{m.generated&&<span className="badge">AI-generated · Not source-verified</span>}<p>{m.text}</p>
+          {Boolean(m.references?.length)&&<details><summary>References used</summary>{m.references?.map(reference=>reference.kind==='uploaded'
+            ?<button key={reference.id} className="link accent source" onClick={()=>open(null,reference)}>Uploaded Source · {sourceLabel(reference)}</button>
+            :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">Web Source · {reference.title} · {new URL(reference.url).hostname}</a>)}</details>}{m.source&&<button className="link accent" onClick={()=>open(null,m.source)} >View answer source</button>}</div>)}</div>{!sampleMode&&<div className="study-output"><label>Sources<select value={sourceMode} onChange={event=>setSourceMode(event.target.value)}><option value="notes">My Notes</option><option value="mixed">Notes + Web</option><option value="web">Web</option></select></label>
+          {sourceMode!=='notes'&&generatedCoach&&<label>Public topic for web search<input value={publicTopic} maxLength={100} placeholder="e.g. deadlock avoidance" onChange={event=>setPublicTopic(event.target.value)}/></label>}
+          <small>{generatedCoach?'Relevant excerpts may be sent to Cloudflare Workers AI. Only the public topic field is sent to web search.':'AI generation is unavailable. Source-backed study tools still work.'}</small>
+          {generatedCoach&&fitted.length>0&&<button className="secondary" disabled={coachPending} onClick={()=>send('Generate revision notes for: '+fitted.slice(0,remainingTime<=15?2:4).map(question=>question.topic).join(', '))}>Generate AI revision notes</button>}</div>}
+          <form className="inline" onSubmit={e=>{e.preventDefault();send(chat);}}><input aria-label="Ask about your plan" placeholder="Ask about your plan…" maxLength={1000} value={chat} onChange={e=>setChat(e.target.value)}/><button className="primary icon-btn" aria-label="Send chat message" disabled={!chat.trim()||coachPending}><Icon name="send"/></button></form></aside></div>
           {result.length>0&&pack.warnings.length>0&&<div className="coverage"><h3>Sources and Coverage</h3>
             <ul className="notice">{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>
           </div>}

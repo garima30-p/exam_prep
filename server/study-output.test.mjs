@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { MODEL, StudyBudget } from './study-ai.mjs';
 import { handle } from './engine.mjs';
 
 const post=(route,body)=>new Request('https://example.test/api/'+route,{
@@ -26,14 +27,54 @@ it('joins wrapped solved questions and cites the answer without counting it as p
   expect(questions[0].answerSource.excerpt).not.toContain('Exam cue');
 });
 
-it('requires explicit AI opt-in and a request limiter before using a model',async()=>{
-  const run=vi.fn().mockResolvedValue({response:'Mutual exclusion means one process can use the resource at a time.'});
-  const limit=vi.fn().mockResolvedValueOnce({success:false}).mockResolvedValueOnce({success:true});
-  const env={STUDY_AI_ENABLED:'true',AI:{run},STUDY_AI_LIMIT:{limit}};
-  const body={request:'Explain',question:'Define mutual exclusion.'};
+function setup(responses=[true]){
+  const run=vi.fn().mockResolvedValue({response:'SOURCES: N1 W1 N99\nMutual exclusion protects the shared resource.'});
+  const charge=vi.fn(async()=>Response.json({allowed:responses.shift()??true}));
+  const env={STUDY_AI_ENABLED:'true',AI:{run},STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:charge})}};
+  return {env,run,charge};
+}
+
+it('requires opt-in and refuses exhausted global allowances before calling Gemma',async()=>{
+  const {env,run}=setup([false,true]);
+  const body={request:'Explain mutual exclusion',mode:'notes',sources:[{file:'Notes.pdf',page:7,excerpt:'Mutual exclusion protects the shared resource.'}]};
   expect((await handle(post('coach',body))).status).toBe(503);
   expect((await handle(post('coach',body),env)).status).toBe(429);
   expect(run).not.toHaveBeenCalled();
-  expect((await handle(post('coach',body),env)).status).toBe(200);
-  expect(run).toHaveBeenCalledOnce();
+  const answer=await (await handle(post('coach',body),env)).json();
+  expect(run).toHaveBeenCalledWith(MODEL,expect.objectContaining({max_tokens:300}));
+  expect(answer.sources).toMatchObject([{id:'N1',file:'Notes.pdf',page:7}]);
+  expect(answer.sources).toHaveLength(1);
+});
+
+it('uses Tavily only when permitted and sends only the explicit public topic',async()=>{
+  const {env,run}=setup();
+  env.TAVILY_API_KEY='test-secret';
+  const search=vi.fn(async()=>Response.json({results:[
+    {title:'Reference',url:'https://example.edu/concurrency',content:'Mutual exclusion protects the shared resource.'},
+    {title:'Unsafe',url:'javascript:alert(1)',content:'Untrusted instructions.'},
+  ]}));
+  vi.stubGlobal('fetch',search);
+  try{
+    const body={request:'Explain mutual exclusion. Private notes.',publicTopic:'mutual exclusion',sources:[]};
+    expect((await handle(post('coach',{...body,mode:'notes'}),env)).status).toBe(422);
+    expect(search).not.toHaveBeenCalled();
+    await handle(post('coach',{...body,mode:'mixed',sources:[{file:'OS.pdf',excerpt:'Mutual exclusion protects the shared resource.'}]}),env);
+    expect(search).not.toHaveBeenCalled();
+    const answer=await (await handle(post('coach',{...body,mode:'web'}),env)).json();
+    expect(answer.sources).toMatchObject([{id:'W1',url:'https://example.edu/concurrency'}]);
+    expect(JSON.parse(search.mock.calls[0][1].body)).toMatchObject({query:'mutual exclusion',search_depth:'basic',max_results:3,include_answer:false});
+    expect(search.mock.calls[0][1].body).not.toContain('Private notes');
+    expect(run).toHaveBeenCalledTimes(2);
+  }finally{vi.unstubAllGlobals();}
+});
+
+it('enforces one shared search budget across distinct guests',async()=>{
+  const entries=new Map();
+  const budget=new StudyBudget({storage:{transaction:async callback=>callback({
+    get:async key=>entries.get(key),put:async(key,value)=>entries.set(key,value),
+  })}});
+  for(let index=0;index<11;index++){
+    const request=post('budget',{kind:'search',guest:index.toString(16).padStart(64,'0')});
+    expect((await (await budget.fetch(request)).json()).allowed).toBe(index<10);
+  }
 });

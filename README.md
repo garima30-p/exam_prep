@@ -66,5 +66,5 @@ The command uses the bundled model by default. Use `--exact` to exercise fallbac
 
 ### Optional generated explanations
 
-The default deployment uses extractive study notes and does not call a cloud model. To enable generated coach explanations on a Workers Free account, configure the Workers AI binding as `AI`, configure a Worker rate-limiting binding as `STUDY_AI_LIMIT` (for example, 3 requests per minute), and set `STUDY_AI_ENABLED=true`. The API requires all three. Keep the account on the Free plan to enforce the provider's daily allocation. The coach bounds request and response lengths, and it falls back to the source passage when generation fails. Exports use the already generated study pack.
+Gemma 4 26B A4B uses the Workers AI binding and the StudyBudget SQLite Durable Object. The default deployment sets STUDY_AI_ENABLED=false. Enable it only on an account with provider-side free usage enforcement and overages disabled. The Worker reserves at most 20 inference calls and 10 web calls per UTC day across all locations, with smaller guest limits. Configure the optional TAVILY_API_KEY as a Worker secret on a Tavily account with overages disabled. Only the explicit public topic is sent to Tavily. Deterministic planning, study notes and downloads work with the flag off.
 
