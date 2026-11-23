@@ -279,6 +279,11 @@ dialog::backdrop{background:var(--backdrop)}
 .drawer-exam small,.book-page-number,.book-content>small{color:var(--muted);font-size:.8rem}
 .study-drawer h2{margin:.9rem 0 .35rem;font-size:.9rem}
 .study-drawer ol{margin:0;padding:0;list-style:none}
+.drawer-documents{margin:0;padding:0;list-style:none}
+.study-drawer .drawer-documents button{align-items:center;min-height:44px;overflow-wrap:anywhere}
+.drawer-documents svg{flex:none}
+.attachment-preview{display:grid;gap:.65rem;justify-items:start;overflow-wrap:anywhere}
+.attachment-preview label{width:100%}
 .study-drawer li button{display:flex;gap:.55rem;align-items:baseline;padding:.5rem .45rem;width:100%;border-radius:.45rem;text-align:left}
 .study-drawer li button:is(:hover,[aria-current="page"]){background:var(--subtle);color:var(--ink)}
 .study-drawer li button[aria-current="page"]{font-weight:700}

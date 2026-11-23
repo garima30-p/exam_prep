@@ -23,6 +23,7 @@ import type { PreparationScope } from './preparation-scope';
 import './style.css';
 
 const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
+const documentKinds=['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'];
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
 const preparationLabels={completed:'Checkpoints completed',revision:'Needs revision','in-progress':'In progress','not-started':'Not started'};
 type Page = 'pricing'|'privacy'|'terms';
@@ -150,7 +151,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [assistantPending,setAssistantPending]=useState(false);
   const [discussion,setDiscussion]=useState<Discussion|null>(null);
   const [needsSubject,setNeedsSubject]=useState(false);
-  const [newAttachments,setNewAttachments]=useState(false);
+  const [draftAttachmentIds,setDraftAttachmentIds]=useState<number[]>([]);
+  const draftFiles=files.filter(item=>draftAttachmentIds.includes(item.id));
+  const newAttachments=draftFiles.length>0;
   function scrollChatToLatest(){
     followChat.current=true;
     if(chatLog.current)chatLog.current.scrollTop=chatLog.current.scrollHeight;
@@ -191,6 +194,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [page,setPage]=useState<Page|null>(null);
   const [source,setSource]=useState<Source|null>(null);
   const [sourceUrl,setSourceUrl]=useState('');
+  const [previewAttachmentId,setPreviewAttachmentId]=useState<number|null>(null);
+  const previewAttachment=files.find(item=>item.id===previewAttachmentId);
+  const originalFile=previewAttachment?.file??files.find(item=>item.id===source?.documentIndex)?.file;
   const nextFile=useRef(0);
   const input=useRef<HTMLInputElement>(null);
   const dialog=useRef<HTMLDialogElement>(null);
@@ -247,12 +253,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     })();
   },[activeBookPage,book,bookContent,bookErrors,loadingPage,mode]);
   useEffect(()=>{
-    const file=files.find(item=>item.id===source?.documentIndex)?.file;
-    if(!file){setSourceUrl('');return;}
-    const url=URL.createObjectURL(file);
+    if(!originalFile){setSourceUrl('');return;}
+    const url=URL.createObjectURL(originalFile);
     setSourceUrl(url);
     return ()=>URL.revokeObjectURL(url);
-  },[files,source]);
+  },[originalFile]);
   function clearBook(){
     bookRequest.current?.abort();bookRequest.current=null;setLoadingPage(null);
     setBook(null);setBookIndex(0);setBookContent({});setBookErrors({});
@@ -268,7 +273,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       accepted.push({id:++nextFile.current,file,kind:materialType(file.name)});
     }
     setFiles([...files,...accepted]);
-    if(accepted.length){clearBook();setPlanGenerated(false);setAwaitReview(false);setNewAttachments(true);}
+    if(accepted.length){
+      clearBook();setPlanGenerated(false);setAwaitReview(false);
+      setDraftAttachmentIds(current=>[...current,...accepted.map(item=>item.id)]);
+    }
     setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 files of 20 MB each. Use PDF, DOCX, PPTX, PNG, JPEG, WebP, or BMP. Save older .ppt files as .pptx.' : '');
   };
   function preparationContext(value:string):Context {
@@ -290,6 +298,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     revealLatest.current=true;
     setMessages(current=>[...current,{role:'You',text}]);
     setDraft('');
+    setDraftAttachmentIds([]);
   }
   function requestSubject(){
     setNeedsSubject(true);
@@ -372,7 +381,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         setResult(analysis.questions);setWarnings(analysis.warnings);
         setOptimization(analysis.optimization?{data:analysis.optimization}:null);
         setProgress(runProgress);
-        setNewAttachments(false);
         appendAssistant('Your study outline is ready. See the first page below.');
         return;
       }
@@ -414,7 +422,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       run.signal.throwIfAborted();
       setResult(analysis.questions);setWarnings(analysis.warnings);
       setOptimization(analysis.optimization?{data:analysis.optimization}:null);
-      setPreparedScope(scope);setProgress(runProgress);restartBudget();setLimit(10);setPlanGenerated(true);setNewAttachments(false);appendAssistant('Your Must Read summary is ready below.'); }
+      setPreparedScope(scope);setProgress(runProgress);restartBudget();setLimit(10);setPlanGenerated(true);appendAssistant('Your Must Read summary is ready below.'); }
     catch(error) { setNotice(run.signal.aborted?'Processing cancelled. Run again to resume from usable pages.':error instanceof Error?error.message:'The study plan could not load. Try again.'); }
     finally {controller.current=null;setProcessingMessage('');setBusy(false);}
   }
@@ -515,9 +523,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
     if(sampleMode&&!reply)reply=activeApi.chat(text,visible.map((question,index)=>({...question,id:index+1})));
     const message:Message={role:sampleMode?'Demo assistant':'in-nocent',text:reply??'',pending:!reply};
-    followChat.current=true;
-    revealLatest.current=true;
-    setMessages(current=>[...current,{role:'You',text},message]);setDraft('');
+    appendUser(text);
+    setMessages(current=>[...current,message]);
     if(reply)return;
 
     let records=documents;
@@ -537,7 +544,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           subject=inspected.subject;
           setContext(current=>({...current,subject:inspected.subject}));
         }
-        setNewAttachments(false);
       }catch(error){
         const failure=run.signal.aborted?'Attachment processing was cancelled.':'The attachments could not be opened. Try sending your question again.';
         setMessages(current=>current.map(item=>item===message?{...message,pending:false,error:failure}:item));
@@ -624,7 +630,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
     const studyInput=text||prompt;
     const adjusted=preparationContext(studyInput);
-    if(text||newAttachments)appendUser(text||files.map(file=>file.file.name).join(', '));
+    if(text||newAttachments)appendUser(text||draftFiles.map(file=>file.file.name).join(', '));
     setDiscussion(null);
     setPrompt(studyInput);
     setContext(adjusted);
@@ -637,13 +643,22 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setMessages(current=>current.map(item=>item===message?pending:item));
     void askAssistant(pending,message.retry);
   }
-  function open(next:Page|null, reference:Source|null=null){setPage(next);setSource(reference);dialog.current?.showModal();}
+  function open(next:Page|null, reference:Source|null=null){
+    setPreviewAttachmentId(null);
+    setPage(next);setSource(reference);dialog.current?.showModal();
+  }
+  function openAttachment(id:number){
+    setDrawerOpen(false);
+    drawerToggle.current?.focus();
+    setSource(null);setPage(null);setPreviewAttachmentId(id);
+    dialog.current?.showModal();
+  }
   function reset(){
     clearBook();practiceRun.current?.abort();analyzed.current=null;setPreparedScope(null);setQuestionAnswers({});
     activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
     setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);
     setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setDraft('');setContext(empty);
-    setNeedsTime(false);setNeedsSubject(false);setNotice('');setPlanGenerated(false);setDiscussion(null);setNewAttachments(false);
+    setNeedsTime(false);setNeedsSubject(false);setNotice('');setPlanGenerated(false);setDiscussion(null);setDraftAttachmentIds([]);setPreviewAttachmentId(null);
   }
   function toggleExample(){
     clearBook();setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);
@@ -655,7 +670,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setFiles(current=>kind?current.map(file=>file.id===id?{...file,kind,kindOverride:true}:file):current.filter(file=>file.id!==id));
     if(!kind){
       setDocuments(current=>current.filter(document=>document.id!==id));
-      if(files.length===1)setNewAttachments(false);
+      setDraftAttachmentIds(current=>current.filter(fileId=>fileId!==id));
     }
     setAwaitReview(false);setPlanGenerated(false);
   }
@@ -837,6 +852,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={mode==='study'&&bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
           <span>{index+1}</span>{unit.title}</button></li>)}
       </ol></nav>}
+      {files.some(item=>!draftAttachmentIds.includes(item.id))&&<section aria-labelledby="attached-documents-title">
+        <h2 id="attached-documents-title">Attached documents</h2>
+        <ul className="drawer-documents">
+          {files.filter(item=>!draftAttachmentIds.includes(item.id)).map(item=><li key={item.id}>
+            <button type="button" onClick={()=>openAttachment(item.id)}><Icon name="file"/>{item.file.name}</button>
+          </li>)}
+        </ul>
+      </section>}
     </aside>
     <main id="main" className={'wrap '+(workspaceResult?'workspace':'landing')}>
       {modeButtons('Preparation mode')}
@@ -938,7 +961,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <textarea ref={workspaceInput} id="prompt" value={draft} onChange={event=>setDraft(event.target.value)}
             onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();submitMessage();}}}
             placeholder={needsTime&&mode==='last-minute'?'How many minutes can you study?':'Add past papers, your syllabus, or notes'} rows={2} maxLength={8000}/>
-          {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
+          {draftFiles.length>0 && <ul className="files">{draftFiles.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{documentKinds.map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
@@ -994,8 +1017,21 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </nav>
       </div>
     </dialog>
-    <dialog ref={dialog} aria-labelledby="dialog-title" onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>
-      {source?<><h2 id="dialog-title">{source.file}</h2><p>{sampleMode?'Sample fixture · ':''}{source.file==='Pasted text'?source.number:documentLocation(source.file,source.page)+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={originalDocumentLink(source.file,sourceUrl,source.page)}>{documentFormat(source.file)==='pdf'?'Open original PDF at page '+source.page:'Open original file'}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>Original files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
+    <dialog ref={dialog} aria-labelledby="dialog-title" onClose={()=>{setPreviewAttachmentId(null);setSource(null);}} onClick={e=>{if(e.target===e.currentTarget)e.currentTarget.close();}}><div className="dialog-content"><form method="dialog" className="dialog-close"><button className="icon-btn" aria-label="Close dialog"><Icon name="close"/></button></form>
+      {previewAttachment?<div className="attachment-preview">
+        <h2 id="dialog-title">{previewAttachment.file.name}</h2>
+        {sourceUrl&&<a className="link accent" href={sourceUrl} target="_blank" rel="noopener noreferrer">Open original file</a>}
+        <label>Document type
+          <select value={previewAttachment.kind} disabled={busy} onChange={event=>modifyFile(previewAttachment.id,event.target.value)}>
+            {documentKinds.map(kind=><option key={kind}>{kind}</option>)}
+          </select>
+        </label>
+        <button type="button" className="link" disabled={busy} onClick={()=>{
+          dialog.current?.close();
+          setPreviewAttachmentId(null);
+          modifyFile(previewAttachment.id);
+        }}>Remove attachment</button>
+      </div>:source?<><h2 id="dialog-title">{source.file}</h2><p>{sampleMode?'Sample fixture · ':''}{source.file==='Pasted text'?source.number:documentLocation(source.file,source.page)+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={originalDocumentLink(source.file,sourceUrl,source.page)}>{documentFormat(source.file)==='pdf'?'Open original PDF at page '+source.page:'Open original file'}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>Original files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
     </div></dialog>
   </>;
 }
