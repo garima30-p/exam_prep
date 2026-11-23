@@ -19,11 +19,10 @@ import type { BookPage } from './study-book';
 import { ReviewForm, reviewItems } from './learning-review';
 import type { ReviewAttempt, ReviewItem } from './learning-review';
 import { usePractice } from './practice';
-import type { LearningSource, PracticeItem, PracticeTopic } from './practice';
+import type { AcademicResult, LearningSource, PracticeItem, PracticeTopic } from './practice';
 import { PracticeQuestions, SolvedExample } from './practice-panel';
 import './style.css';
 
-const sample = 'Teach me the essentials of DBMS.';
 const subjectKey=(label:string)=>(learningSubject(label)||label).toLowerCase();
 const documentKinds=['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'];
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
@@ -35,8 +34,9 @@ type Discussion = {title:string;text:string;sources:readonly Source[];question?:
 type CoachSource=LearningSource;
 type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subject:string;topics:string[];studyPage?:{title:string;text:string};
   activeQuestion?:string;preparationMode:PreparationMode;
+  university?:string;academicGrounding?:boolean;
   history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
-type Message = {role:'You'|'Demo assistant'|'in-nocent';text:string;references?:CoachSource[];
+type Message = {role:'You'|'in-nocent';text:string;references?:CoachSource[];inline?:boolean;
   generated?:boolean;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest;offer?:{topic:PracticeTopic;count:number;format:string}};
 
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'|'menu'}) {
@@ -62,20 +62,28 @@ function SourceStatus({references,openSource,generated=true}:{
 }) {
   if(!generated&&!references.length)return null;
   return <div className="source-status">
-    {generated&&<small>{references.length?'AI-generated':'AI-generated · Not source-verified'}</small>}
-    {references.length>0&&<details><summary>Sources ({references.length})</summary>
-      {references.map(reference=>reference.kind==='uploaded'
-        ?<button key={reference.id} className="link accent source" onClick={()=>openSource(reference)}>{sourceLabel(reference)}</button>
-        :<a key={reference.id} className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>)}
+    {generated&&<small>{references.length?'AI-generated explanation':'AI-generated · Not source-verified'}</small>}
+    {references.length>0&&<details><summary>Sources ↗ ({references.length})</summary>
+      <ul className="source-references">{references.map(reference=><li key={reference.id}>
+        {reference.kind==='uploaded'?<>
+          <button className="link accent source" onClick={()=>openSource(reference)}>{sourceLabel(reference)}</button>
+          <small>{reference.documentType?'Uploaded '+reference.documentType.toLowerCase():'Student-provided material'}
+            {reference.method==='ocr'?' · OCR text, check against the original':''}</small>
+        </>:<>
+          <a className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>
+          <small>{[reference.publisher,reference.category==='official-syllabus'?'Official university syllabus':reference.category==='official-pyq'
+            ?'Official university PYQ':'Academic reference',reference.status==='page-inspected'?'Page inspected':reference.status==='provider-page-text'
+            ?'Page text supplied by retrieval':reference.status==='provider-excerpt'?'Search excerpt':null].filter(Boolean).join(' · ')}</small>
+        </>}
+        {(reference.supportingQuote||reference.excerpt)&&<blockquote>{reference.supportingQuote||reference.excerpt}</blockquote>}
+      </li>)}</ul>
     </details>}
   </div>;
 }
 
 export function App({api=demoApi}:{api?:ExamApi}) {
   const theme = useTheme();
-  const [exampleMode,setExampleMode]=useState(false);
-  const activeApi=exampleMode?demoApi:api;
-  const sampleMode=activeApi===demoApi;
+  const activeApi=api;
   const [mode,setMode]=useState<PreparationMode>('last-minute');
   const [drawerOpen,setDrawerOpen]=useState(false);
   useEffect(()=>{
@@ -83,8 +91,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   },[]);
   const drawerToggle=useRef<HTMLButtonElement>(null);
   const drawerPanel=useRef<HTMLElement>(null);
-  const [savedBook,setBook]=useState<{subject:string;pages:BookPage[];demo:boolean;promptKey:string}|null>(null);
-  const [bookIndex,setBookIndex]=useState(0);
+  const [savedBook,setBook]=useState<{id:string;subject:string;pages:BookPage[];university:string;promptKey:string}|null>(null);
+  const [activeTopicId,setActiveTopicId]=useState('');
   const practice=usePractice();
   const [selectedQuestions,setSelectedQuestions]=useState<Record<string,PracticeItem>>({});
   const [bookContent,setBookContent]=useState<Record<string,BookContent>>({});
@@ -95,7 +103,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [prompt,setPrompt]=useState('');
   const promptKey=studySessionPrompt(prompt);
   const book=savedBook?.promptKey===promptKey?savedBook:null;
+  const bookIndex=Math.max(0,book?.pages.findIndex(page=>page.id===activeTopicId)??0);
   const activeBookPage=book?.pages[bookIndex];
+  const [academicByScope,setAcademicByScope]=useState<Record<string,AcademicResult|null>>({});
+  const academicRequests=useRef(new Set<string>());
+  const academic=book?academicByScope[book.id]:undefined;
+  async function fetchAcademic(subject:string,university:string,signal:AbortSignal){
+    const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal,
+      body:JSON.stringify({task:'academic',subject,university})});
+    const data=await response.json() as AcademicResult;
+    return response.ok&&data.scope&&Array.isArray(data.sources)?data:null;
+  }
   const [context,setContext]=useState(empty);
   const [files,setFiles]=useState<Material[]>([]);
   const [notice,setNotice]=useState('');
@@ -156,7 +174,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const obscured=Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop);
       section.style.setProperty('--composer-inset',obscured+'px');
     };
-    const updateLauncher=()=>coachToggle.current?.style.setProperty('--composer-height',section.offsetHeight+'px');
+    const updateLauncher=()=>{
+      const height=section.offsetHeight+'px';
+      coachToggle.current?.style.setProperty('--composer-height',height);
+      document.documentElement.style.setProperty('--composer-clearance',height);
+    };
     const observer=typeof ResizeObserver==='function'?new ResizeObserver(updateLauncher):null;
     observer?.observe(section);
     updateLauncher();
@@ -164,6 +186,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     viewport.addEventListener('scroll',resize);
     return ()=>{
       observer?.disconnect();
+      document.documentElement.style.removeProperty('--composer-clearance');
       viewport.removeEventListener('resize',resize);
       viewport.removeEventListener('scroll',resize);
     };
@@ -217,12 +240,25 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     document.addEventListener('selectionchange',select);
     return ()=>document.removeEventListener('selectionchange',select);
   },[]);
-  const activePractice:PracticeTopic|null=book&&activeBookPage?{key:activeBookPage.id,subject:book.subject,page:activeBookPage,demo:book.demo}:null;
+  function practiceTopic(page:BookPage):PracticeTopic|null{
+    if(!book)return null;
+    return {key:JSON.stringify([book.id,page.id]),subject:book.subject,page,university:book.university,official:academic?.sources??[]};
+  }
+  const activePractice=activeBookPage?practiceTopic(activeBookPage):null;
+  useEffect(()=>{
+    if(!book||academicRequests.current.has(book.id))return;
+    academicRequests.current.add(book.id);
+    void fetchAcademic(book.subject,book.university,AbortSignal.timeout(12000))
+      .then(data=>setAcademicByScope(current=>({...current,[book.id]:data})))
+      .catch(()=>setAcademicByScope(current=>({...current,[book.id]:null})));
+  },[book]);
   const selectedQuestion=activeBookPage?selectedQuestions[activeBookPage.id]:undefined;
   useEffect(()=>{
-    if(mode==='study'&&activePractice&&!practice.batches[activePractice.key]?.requested)void practice.add(activePractice,6,'',true);
+    if(mode!=='study'||!activePractice)return;
+    if(!practice.batches[activePractice.key]?.requested)void practice.add(activePractice,6,'',true);
+    if(!practice.details[practice.detailKey(activePractice,'example')])void practice.load(activePractice,'example');
   },[mode,activePractice,practice]);
-  const lessonKey=activeBookPage?mode+':'+activeBookPage.id:'';
+  const lessonKey=activePractice?mode+':'+activePractice.key:'';
   const activeBookContent=bookContent[lessonKey];
   useEffect(()=>{
     if(!activeBookPage)return;
@@ -233,12 +269,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(!book||!activeBookPage||loadingPage||bookRequest.current||bookContent[lessonKey]||bookErrors[lessonKey])return;
     const unit=activeBookPage;
     const excerpts=unit.passages.slice(0,3);
-    if(book.demo){
-      const question=unit.questions.find(item=>item.answer);
-      setBookContent(current=>({...current,[lessonKey]:{text:question?.answer||(excerpts.map(source=>source.excerpt).join('\n\n')||
-        'A database stores related information. A database management system lets you define, query, and update that information.'),references:[],webLimited:false}}));
-      return;
-    }
     const operation=new AbortController();
     bookRequest.current=operation;
     setLoadingPage(lessonKey);
@@ -246,10 +276,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       try{
         const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
           signal:AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]),
-          body:JSON.stringify({task:'notes',mode:'auto',studyUnit:true,learningMode:mode,minutes:context.minutes||undefined,
+          body:JSON.stringify({task:'notes',mode:'auto',academicGrounding:true,university:book.university,studyUnit:true,learningMode:mode,minutes:context.minutes||undefined,
             subject:book.subject,topics:[unit.title],topic:unit.title,
             request:'Teach '+unit.title+' to a beginner. Start with the foundation, explain the essential ideas and relationships, then give a short takeaway.',
-            priorities:unit.questions.slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages})});
+            priorities:unit.questions.slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages.map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'}))})});
         const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
         if(!response.ok||!data.explanation?.trim()){
           throw new Error(data.code==='usage_limit'?'The AI usage limit has been reached.':data.code==='citation_validation_failed'
@@ -277,7 +307,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     practice.reset();setQuiz(null);setQuizAttempts({});
     setSelectedQuestions({});
     bookRequest.current?.abort();bookRequest.current=null;setLoadingPage(null);
-    setBook(null);setBookIndex(0);setBookContent({});setBookErrors({});setStudied({});setRecallPage(null);
+    setBook(null);setActiveTopicId('');setBookContent({});setBookErrors({});setStudied({});setRecallPage(null);
   }
   const attachment = (incoming:FileList|null) => {
     if (!incoming || busy) return;
@@ -354,7 +384,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       adjusted={...adjusted,subject:requestedSubject};
       const requestedTopic=studyTopic(inputPrompt);
       const focus=requestedTopic.toLowerCase()===adjusted.subject.toLowerCase()?'':requestedTopic;
-      const extracted=sampleMode?null:revise(focus?'':inputPrompt,records,inspected.files,adjusted.subject);
+      const extracted=revise(focus?'':inputPrompt,records,inspected.files,adjusted.subject);
       if(records.some(document=>!documentComplete(document))&&!extracted&&
         !records.some(document=>document.pages.some(page=>page.text.trim()&&isTrusted(page)))){
         setNotice('No readable material was found. Check the original or retry the attachment.');
@@ -378,13 +408,28 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const subject=learningSubject(adjusted.subject||inspected.subject,adjusted.subject||inspected.subject)
         ||focus||extracted?.title||analysis.questions[0]?.topic||'';
       if(!subject){requestSubject();return;}
-      let outline=inspected.topics.map(title=>({title,group:''}));
-      if(!outline.length&&!analysis.questions.length&&!focus&&subject!=='Operating Systems'&&!sampleMode){
+      const namedUniversity=/\b(?:university|iit\b|gehu\b|geu\b|mit\b|[a-z]+\.ac\.[a-z]+|[a-z]+\.edu)\b/i.test(inputPrompt);
+      const university=namedUniversity?inputPrompt.slice(0,500):(!changingSubject?savedBook?.university??'':'');
+      const universityKey=university.toLowerCase().trim();
+      const bookId=JSON.stringify([subjectKey(subject),universityKey]);
+      let course=academicByScope[bookId];
+      if(mode==='study'&&university&&course===undefined){
+        setProcessingMessage('Checking the university curriculum…');
+        try{course=await fetchAcademic(subject,university,AbortSignal.any([run.signal,AbortSignal.timeout(9500)]));}
+        catch{run.signal.throwIfAborted();course=null;}
+        if(course){
+          academicRequests.current.add(bookId);
+          setAcademicByScope(current=>({...current,[bookId]:course}));
+        }
+      }
+      const officialTopics=(course?.sources??[]).filter(source=>source.category==='official-syllabus').flatMap(source=>source.scopeTopics??[]);
+      let outline=[...new Set([...officialTopics.map(title=>title.replace(/^./,letter=>letter.toUpperCase())),...inspected.topics])].map(title=>({title,group:''}));
+      if(!outline.length&&!analysis.questions.length&&!focus&&subject!=='Operating Systems'){
         try{
           setProcessingMessage('Finding the main topics…');
           const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
             signal:AbortSignal.any([run.signal,AbortSignal.timeout(25000)]),
-            body:JSON.stringify({task:'outline',subject})});
+            body:JSON.stringify({task:'outline',subject,university,academicGrounding:true,sources:extracted?.passages??[]})});
           const data=await response.json() as {topics?:{title:string;group:string}[]};
           if(response.ok&&Array.isArray(data.topics))outline=data.topics;
           else setNotice('The full topic outline is unavailable. You can still start with the subject or enter a specific topic.');
@@ -393,7 +438,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           setNotice('The full topic outline is unavailable. You can still start with the subject or enter a specific topic.');
         }
       }
-      const pages=bookOutline(analysis,subject,focus,extracted?.passages??[],outline);
+      const describeSource=(source:Source)=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'});
+      const pages=bookOutline(analysis,subject,focus,extracted?.passages??[],outline).map(page=>({...page,
+        passages:page.passages.map(describeSource),
+        questions:page.questions.map(question=>({...question,answerSource:question.answerSource?describeSource(question.answerSource):null}))
+      }));
       if(!pages.length){requestSubject();return;}
       if(activeSubject.current&&subjectKey(activeSubject.current)!==subjectKey(subject)){
         activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
@@ -403,7 +452,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       activeSubject.current=subject;
       evidenceIds.current=scopedIds;
       setContext(current=>({...current,subject}));
-      setBook({subject,pages,demo:sampleMode,promptKey:studySessionPrompt(inputPrompt)});
+      setActiveTopicId(pages[0].id);
+      setBook({id:bookId,subject,pages,university,promptKey:studySessionPrompt(inputPrompt)});
       setResult(analysis.questions);setWarnings(analysis.warnings);
     }catch(error){
       setNotice(run.signal.aborted?'Reading cancelled. Send again to resume.':error instanceof Error?error.message:'These notes could not load. Try again.');
@@ -442,18 +492,18 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(!text||controller.current||activeAssistantRequest.current)return;
     const suppliedMinutes=duration(text);
     if(suppliedMinutes)setContext(current=>({...current,minutes:suppliedMinutes}));
-    const reply=sampleMode?activeApi.chat(text,result??[]):undefined;
     const more=text.match(/^(?:please )?(?:generate|add|give me)\s+(\d{1,2})\s+more\s*(.*?)\s*questions\b[.!?]?$/i);
     const requestedFormat=more?.[2].trim()||'';
     const specificFormat=/numerical|coding|conceptual|comparison|theory|analytical|descriptive|multiple.choice/i.test(requestedFormat);
     const fitsTopic=!requestedFormat||specificFormat||activePractice?.page.title.toLowerCase().includes(requestedFormat.toLowerCase());
     const offer=more&&fitsTopic&&mode==='study'&&activePractice?{topic:activePractice,count:Math.min(10,Math.max(1,Number(more[1]))),
       format:specificFormat?requestedFormat:''}:undefined;
-    const message:Message={role:sampleMode?'Demo assistant':'in-nocent',text:offer?'I can add these to '+offer.topic.page.title+'.':reply??'',pending:!reply&&!offer,offer};
+    const inline=mode==='last-minute';
+    const message:Message={role:'in-nocent',inline,text:offer?'I can add these to '+offer.topic.page.title+'.':'',pending:!offer,offer};
     coachAtBottom.current=true;
     setCoachDraft('');
-    setMessages(current=>[...current,{role:'You',text},message]);
-    if(reply||offer)return;
+    setMessages(current=>[...current,{role:'You',text,inline},message]);
+    if(offer)return;
 
     let records=documents;
     let retrievalFiles=files;
@@ -512,9 +562,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
     }
     void askAssistant(message,{request:text,mode:'auto',task:/\bmarks?\b/i.test(text)?'exam':'chat',
-      topic:target?.title??selected?.topic,subject,topics,preparationMode:mode,activeQuestion:question?.prompt,
+      topic:target?.title??selected?.topic,subject,topics,preparationMode:mode,university:book?.university,academicGrounding:true,activeQuestion:question?.prompt,
       studyPage:target?{title:target.title,text:target.text.slice(0,1400)}:undefined,
-      history:history.slice(-6),sources,minutes:suppliedMinutes||context.minutes});
+      history:history.slice(-6),sources:sources.map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'})),minutes:suppliedMinutes||context.minutes});
   }
   function discuss(target:Discussion){
     setDiscussion({...target,pageId:activeBookPage?.id});
@@ -553,7 +603,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const studyRequest=(/^teach me\b/i.test(text)&&Boolean(studyTopic(text)))||((!book||/\b(?:exam|paper) (?:preparation|revision|hai)\b/i.test(text))&&Boolean(learningSubject(text))&&!text.includes('?'));
     const preparation=newMaterial||examRequest||summaryRequest||studyRequest||(!workspaceResult&&notes)||(!text&&!workspaceResult&&(prompt||files.length));
     if(!preparation){
-      setDraft('');setCoachOpen(true);void send(text);
+      setDraft('');if(mode==='study')setCoachOpen(true);void send(text);
       return;
     }
     if(!text&&!prompt&&!files.length){
@@ -570,7 +620,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   function retryAssistant(message:Message) {
     if(!message.retry||busy||activeAssistantRequest.current)return;
-    const pending:Message={role:message.role,text:'',pending:true};
+    const pending:Message={role:message.role,inline:message.inline,text:'',pending:true};
     setMessages(current=>current.map(item=>item===message?pending:item));
     void askAssistant(pending,message.retry);
   }
@@ -587,14 +637,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   function reset(){
     clearBook();analyzed.current=null;activeSubject.current='';evidenceIds.current=null;incomingEvidenceIds.current=[];
     activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
-    setExampleMode(false);setResult(null);setWarnings([]);
+    setResult(null);setWarnings([]);
     setMessages([]);setCoachDraft('');setCoachOpen(false);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setDraft('');setContext(empty);
     setNeedsSubject(false);setNotice('');setDiscussion(null);setDraftAttachmentIds([]);setPreviewAttachmentId(null);
-  }
-  function toggleExample(){
-    clearBook();setResult(null);setWarnings([]);setAwaitReview(false);
-    analyzed.current=null;setExampleMode(!exampleMode);setPrompt('');setDraft(exampleMode?'':sample);
-    setNeedsSubject(false);setDiscussion(null);
   }
   function modifyFile(id:number,kind?:string) {
     clearBook();
@@ -613,6 +658,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   function selectMode(next:PreparationMode){
     setMode(next);setNotice('');setDiscussion(null);setRecallPage(null);
+    if(next==='last-minute')setCoachOpen(false);
     if(drawerOpen)drawerToggle.current?.focus();
     setDrawerOpen(false);
   }
@@ -621,7 +667,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   function openBookPage(index:number,advancing=false){
     if(advancing)rememberTopic();
-    setBookIndex(index);setRecallPage(null);setDiscussion(null);
+    if(!book?.pages[index])return;
+    setActiveTopicId(book.pages[index].id);setRecallPage(null);setDiscussion(null);
     if(drawerOpen)drawerToggle.current?.focus();
     setDrawerOpen(false);
   }
@@ -630,7 +677,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     rememberTopic();
     const items=book.pages.flatMap(page=>{
       if(!studied[page.id]&&page!==activeBookPage)return [];
-      const content=bookContent[mode+':'+page.id]??bookContent['study:'+page.id]??bookContent['last-minute:'+page.id];
+      const key=practiceTopic(page)?.key;
+      const content=bookContent[mode+':'+key]??bookContent['study:'+key]??bookContent['last-minute:'+key];
       return content?reviewItems(page,content.text,true):[];
     });
     const key=JSON.stringify([activeBookPage?.id,...items.map(item=>item.id)]);
@@ -682,7 +730,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}</p></div>}
       {book&&<nav aria-label="Table of contents"><h2>Contents</h2><ol>
         {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
-          <span>{index+1}</span>{unit.title}</button></li>)}
+          <span aria-hidden="true">{index+1}</span>{unit.title}</button></li>)}
       </ol></nav>}
       {files.some(item=>!draftAttachmentIds.includes(item.id))&&<section aria-labelledby="attached-documents-title">
         <h2 id="attached-documents-title">Attached documents</h2>
@@ -700,18 +748,34 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
         {!busy&&!reviewDocuments.length&&warnings.some(warning=>warning.startsWith('OCR-only'))&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ OCR evidence needs review</button>}
       </div>
+      {mode==='last-minute'&&messages.some(message=>message.inline)&&<section className="learning-notes inline-learning" aria-label="Inline explanations">
+        {messages.filter(message=>message.inline).slice(-2).map((message,index)=><div key={index}>
+          {message.role==='You'?<p>{message.text}</p>:message.pending?<p role="status">Preparing an explanation…</p>:
+            message.error?<p role="alert">{message.error} {message.retry&&<button type="button" className="link" onClick={()=>retryAssistant(message)}>Retry</button>}</p>:
+            <><CoachAnswer text={message.text}/><SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/></>}
+        </div>)}
+      </section>}
       {book&&activeBookPage&&<div className="learning-layout">
         <div className="mobile-learning-actions">
           <button type="button" className="secondary" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>
           <button type="button" className="secondary" onClick={()=>mapDialog.current?.showModal()}>Topic Map</button>
         </div>
         <section ref={studyNotes} className="learning-notes" aria-label={mode==='study'?'Study workspace':'Study notes'}>
+          {academic===null&&book.university&&<p className="notice">University references could not be checked. Use uploaded material or general explanations.</p>}
+          {academic&&<div className="academic-scope">
+            {academic.scope.requested&&<small>{academic.scope.officialSyllabus?'Official syllabus located for '+(academic.scope.institution??'the named university')+'.'
+              :'An official syllabus for '+(academic.scope.institution??'the named university')+' could not be confirmed. Use uploaded material or general academic references.'}</small>}
+            {academic.scope.requested&&!academic.scope.officialPyq&&<small>No official past paper was confirmed for this course.</small>}
+            {academic.sources.length>0&&<details><summary>Course references</summary><SourceStatus references={academic.sources} generated={false} openSource={reference=>open(null,reference)}/></details>}
+          </div>}
           {book.pages.map((unit,index)=>{
-            const key=mode+':'+unit.id;
+            const practiceForPage=practiceTopic(unit)!;
+            const key=mode+':'+practiceForPage.key;
             const content=bookContent[key];
             const current=index===bookIndex;
-            if(!current&&(mode==='study'||index>bookIndex||!content))return null;
-            return <article className="learning-section" key={unit.id}>
+            if(!current&&!content&&!practice.batches[practiceForPage.key])return null;
+            const hidden=!current&&(mode==='study'||index>bookIndex||!content);
+            return <article className="learning-section" key={unit.id} hidden={hidden}>
               <header className="study-heading">
                 {current&&theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={0}/>}
                 <h2 tabIndex={current?-1:undefined} ref={current?studyHeading:undefined}>{unit.title}</h2>
@@ -721,10 +785,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 <CoachAnswer text={content.text.replace(/^#{1,6}\s+([^\n]+)\n+/, (heading,title:string)=>
                   title.trim().toLowerCase()===unit.title.toLowerCase()?'':heading)}/>
                 {content.excerpt&&<p className="notice">Generated notes are unavailable. These excerpts come from your uploaded material.</p>}
-                {book.demo?<small>Demo</small>:<SourceStatus references={content.references} generated={!content.excerpt} openSource={reference=>open(null,reference)}/>}
+                {content.webLimited&&!content.references.length&&<small>Web sources were unavailable for this topic.</small>}
+                <SourceStatus references={content.references} generated={!content.excerpt} openSource={reference=>open(null,reference)}/>
                 {current&&<div className="lesson-actions">
                   <button type="button" className="link accent" onPointerDown={event=>{if(selectedText)event.preventDefault();}}
-                    onClick={()=>discuss({title:unit.title,text:selectedText||content.text,sources:unit.passages})}>Ask Coach{selectedText?' about selection':''}</button>
+                    onClick={()=>{
+                      if(mode==='last-minute')void send('Explain the essentials of '+unit.title+'.');
+                      else discuss({title:unit.title,text:selectedText||content.text,sources:unit.passages});
+                    }}>{mode==='last-minute'?'Explain this topic':'Ask Coach'+(selectedText?' about selection':'')}</button>
                   {mode==='last-minute'&&<button type="button" className="link accent" onClick={()=>selectMode('study')}>Explore deeper</button>}
                   {mode==='last-minute'&&recallPage!==key&&<button type="button" className="link accent" onClick={()=>{rememberTopic();setRecallPage(key);}}>Quick Recall</button>}
                 </div>}
@@ -737,12 +805,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 <p role="alert">{bookErrors[key]}</p>
                 <button type="button" className="secondary" onClick={()=>setBookErrors(({[key]:_,...rest})=>rest)}>Retry topic</button>
               </>:<p role="status">Preparing notes…</p>}
-              {current&&activePractice&&<SolvedExample key={lessonKey} topic={activePractice} practice={practice}
-                askCoach={text=>discuss({title:unit.title,text:selectedText||text,sources:unit.passages})}
+              {(current||mode==='study')&&<SolvedExample key={key} topic={practiceForPage} practice={practice}
+                askCoach={mode==='study'?text=>discuss({title:unit.title,text:selectedText||text,sources:unit.passages}):undefined}
                 renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated)=>
                   <SourceStatus references={references} generated={generated} openSource={reference=>open(null,reference)}/>}/>}
-              {current&&mode==='study'&&activePractice&&<PracticeQuestions key={unit.id} topic={activePractice} practice={practice}
-                selected={selectedQuestion?.id} selectQuestion={selectPractice} askCoach={askPractice} openSource={reference=>open(null,reference)}
+              {mode==='study'&&<PracticeQuestions key={unit.id} topic={practiceForPage} practice={practice}
+                selected={selectedQuestions[unit.id]?.id} selectQuestion={selectPractice} askCoach={askPractice} openSource={reference=>open(null,reference)}
                 renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated)=>
                   <SourceStatus references={references} generated={generated} openSource={reference=>open(null,reference)}/>}/>}
             </article>;
@@ -750,7 +818,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           {mode==='study'?<nav className="book-pagination" aria-label="Study pages">
             <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>← Previous</button>
             <span className="book-page-number">Page {bookIndex+1} of {book.pages.length}</span>
-            <button type="button" className="secondary" disabled={!activeBookContent||bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1,true)}>Next →</button>
+            <button type="button" className="secondary" disabled={bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1,true)}>Next →</button>
           </nav>:activeBookContent&&bookIndex+1<book.pages.length&&
             <button type="button" className="secondary" onClick={()=>openBookPage(bookIndex+1,true)}>Next topic →</button>}
         </section>
@@ -776,15 +844,15 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           </div>
         </form>
         {notice && <p role="alert" className="notice">{notice}</p>}
-        {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading example…':processingMessage}</p>
-          {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
+        {busy && <div className="processing-status"><p role="status" className="notice">{processingMessage}</p>
+          <button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>
         </div>}
-        {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(context,'retry')}>Retry unread files</button>}
+        {!busy&&awaitReview&&<button className="secondary" onClick={()=>void generate(context,'retry')}>Retry unread files</button>}
       </section>
     </main>
-    <button ref={coachToggle} type="button" className="secondary coach-toggle" aria-expanded={coachOpen} aria-controls="study-coach-panel"
-      onClick={()=>coachOpen?minimizeCoach():setCoachOpen(true)}><Icon name="spark"/> Coach</button>
-    <aside ref={coachPanel} id="study-coach-panel" className="coach-panel" aria-labelledby="coach-panel-title" hidden={!coachOpen}
+    {mode==='study'&&<button ref={coachToggle} type="button" className="secondary coach-toggle" aria-expanded={coachOpen} aria-controls="study-coach-panel"
+      onClick={()=>coachOpen?minimizeCoach():setCoachOpen(true)}><Icon name="spark"/> Coach</button>}
+    <aside ref={coachPanel} id="study-coach-panel" className="coach-panel" aria-labelledby="coach-panel-title" hidden={mode!=='study'||!coachOpen}
       onKeyDown={event=>{if(event.key==='Escape'){event.stopPropagation();minimizeCoach();}}}>
       <header className="info-heading"><h2 id="coach-panel-title">Study Coach</h2>
         <button type="button" className="icon-btn" aria-label="Minimize Coach" onClick={minimizeCoach}><Icon name="close"/></button>
@@ -803,7 +871,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         if(coachOpen)coachAtBottom.current=log.scrollHeight-log.scrollTop-log.clientHeight<50;
       }}>
         <div ref={coachContent}>
-        {messages.map((message,index)=><div className={'conversation-message '+(message.role==='You'?'message-user':'message-reply')} key={index}>
+        {messages.filter(message=>!message.inline).map((message,index)=><div className={'conversation-message '+(message.role==='You'?'message-user':'message-reply')} key={index}>
           <span className="sr-only">{message.role}</span>
           {message.pending?<small role="status">Thinking…</small>:message.error?<p role="alert">{message.error}{' '}
             {message.retry&&<button type="button" className="link accent" disabled={assistantPending} onClick={()=>retryAssistant(message)}>Retry</button>}</p>
@@ -836,7 +904,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       <div className="info-heading"><h2 id="quiz-title">Quiz</h2>
         <form method="dialog"><button className="icon-btn" aria-label="Close quiz"><Icon name="close"/></button></form>
       </div>
-      {quiz&&<ReviewForm key={quiz.key} items={quiz.items} subject={sampleMode?undefined:book?.subject}
+      {quiz&&<ReviewForm key={quiz.key} items={quiz.items} subject={book?.subject}
         attempt={quizAttempts[quiz.key]} onAttempt={attempt=>setQuizAttempts(current=>({...current,[quiz.key]:attempt}))}
         revisit={title=>{
           const index=book?.pages.findIndex(page=>page.title===title)??-1;
@@ -860,9 +928,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <p>Sources links to the uploaded passages or web references used in an answer. Unverified explanations are labeled beside the study content.</p>
           {activeBookContent.webLimited&&<p>Web sources were unavailable for this result.</p>}
         </section>}
-        {!sampleMode&&activeApi.prepare&&documents.length>0&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
-        <button className="link accent" type="button" disabled={busy||assistantPending} onClick={()=>{infoDialog.current?.close();toggleExample();}}>{exampleMode?'Exit demo':'Try an example'}</button>
-        {sampleMode?<p>Demo · Sample DBMS data</p>:<p>Original files stay on this device. Extracted text is sent for analysis.</p>}
+        {activeApi.prepare&&documents.length>0&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
+        <p>Original files stay on this device. Extracted text is sent for analysis.</p>
         <nav className="product-links" aria-label="Product information">
           <button className="link" onClick={()=>open('pricing')}>Plans</button>
           <button className="link" onClick={()=>open('privacy')}>Privacy</button>
@@ -884,7 +951,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           setPreviewAttachmentId(null);
           modifyFile(previewAttachment.id);
         }}>Remove attachment</button>
-      </div>:source?<><h2 id="dialog-title">{source.file}</h2><p>{sampleMode?'Sample fixture · ':''}{source.file==='Pasted text'?source.number:documentLocation(source.file,source.page)+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={originalDocumentLink(source.file,sourceUrl,source.page)}>{documentFormat(source.file)==='pdf'?'Open original PDF at page '+source.page:'Open original file'}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>Original files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
+      </div>:source?<><h2 id="dialog-title">{source.file}</h2><p>{source.file==='Pasted text'?source.number:documentLocation(source.file,source.page)+' · '+source.number}{source.file!=='Pasted text'&&source.method==='ocr'?' · OCR text':source.file!=='Pasted text'&&source.method==='manual'?' · Manually verified text':''}</p><blockquote>{source.supportingQuote||source.excerpt}</blockquote>{sourceUrl&&<a className="link accent" target="_blank" rel="noopener noreferrer" href={originalDocumentLink(source.file,sourceUrl,source.page)}>{documentFormat(source.file)==='pdf'?'Open original PDF at page '+source.page:'Open original file'}</a>}</>:page==='pricing'?<Plans/>:page==='privacy'?<><h2 id="dialog-title">Privacy preview</h2><p>Original files stay in browser memory. In the study planner, extracted text and pasted text are sent to the analysis endpoint for scoring. This version keeps no saved sessions. Reloading clears the browser session.</p></>:<><h2 id="dialog-title">Terms preview</h2><p>Use materials you have permission to use. Use rankings as study guidance. No passing guarantee or university affiliation.</p></>}
     </div></dialog>
   </>;
 }

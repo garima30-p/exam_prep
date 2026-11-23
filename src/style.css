@@ -43,6 +43,7 @@
   --radius: 22px;
 }
 *{box-sizing:border-box}
+html{scroll-padding-bottom:var(--composer-clearance,8rem)}
 body{margin:0;min-width:300px;min-height:100vh}
 button,a,input,textarea,select{outline-offset:4px}
 :focus-visible{outline:2px solid var(--accent)}
@@ -431,3 +432,11 @@ dialog::backdrop{background:var(--backdrop)}
  .coach-toggle{right:.6rem}
  .coach-panel{width:100%;right:0;bottom:var(--coach-inset,0px);height:min(36rem,calc(var(--coach-viewport,100dvh) - 1rem));border-radius:var(--radius) var(--radius) 0 0;padding-bottom:max(.65rem,env(safe-area-inset-bottom))}
 }
+
+.source-references{list-style:none;padding:0;margin:.4rem 0}
+.source-references li{padding:.55rem 0;border-block-start:1px solid var(--line);overflow-wrap:anywhere}
+.source-references blockquote{margin:.35rem 0 0;border-inline-start:2px solid var(--line);padding-inline-start:.55rem;color:var(--muted)}
+.academic-scope{display:grid;gap:.25rem;margin:.4rem 0 .9rem;color:var(--muted)}
+.inline-learning{width:min(100%,48rem);margin:.75rem auto}
+.learning-section[hidden]{display:none}
+.topic-map [aria-current]{background:var(--subtle);border-radius:.4rem;padding-inline:.45rem}

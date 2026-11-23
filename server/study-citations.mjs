@@ -45,7 +45,7 @@ export function checkStudyAnswer(raw, registry, strict, verifyRelevance=false) {
           continue;
         }
       }
-      references.set(id, source);
+      references.set(id, {...source,supportingQuote:quote});
     }
     sections.push(section.text.trim());
   }

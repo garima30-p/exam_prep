@@ -57,8 +57,8 @@ it('teaches a recognized exam subject immediately and caches each learning depth
     expect(host.textContent).not.toContain('Generate Questions');
     expect(analyze.mock.calls[0][0].minutes).toBe(0);
     expect(analyze.mock.calls[0][3]?.learning).toBe(true);
-    expect(requests).toMatchObject([{learningMode:'last-minute',topic:'Operating Systems'}]);
-    expect(requests[0]).not.toHaveProperty('minutes');
+    expect(requests.filter(request=>request.task==='notes')).toMatchObject([{learningMode:'last-minute',topic:'Operating Systems'}]);
+    expect(requests.find(request=>request.task==='notes')).not.toHaveProperty('minutes');
     await act(async()=>button('Next topic →').click());
     expect([...host.querySelectorAll('.learning-notes h2')].map(h=>h.textContent)).toEqual(['Operating Systems','Process Management']);
     await act(async()=>button('Study').click());
@@ -66,7 +66,10 @@ it('teaches a recognized exam subject immediately and caches each learning depth
     expect(requests.find(request=>request.learningMode==='study')).toMatchObject({topic:'Process Management'});
     expect(requests.find(request=>request.task==='practiceBatch')).toMatchObject({topic:'Process Management'});
     await act(async()=>button('Last Minute').click());
-    expect(requests.length).toBe(4);
+    expect(requests.filter(request=>request.task==='notes')).toHaveLength(3);
+    expect(requests.filter(request=>request.task==='academic')).toHaveLength(1);
+    expect(requests.filter(request=>request.task==='practiceBatch')).toHaveLength(1);
+    expect(requests.filter(request=>request.task==='example')).toHaveLength(1);
     expect(analyze).toHaveBeenCalledTimes(1);
   }finally{
     await act(async()=>root.unmount());

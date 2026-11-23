@@ -2,18 +2,32 @@ import {useEffect,useRef,useState} from 'react';
 import type {Source} from './api';
 import type {BookPage} from './study-book';
 
-export type LearningSource = (Source & {kind:'uploaded';id:string}) | {kind:'web';id:string;title:string;url:string};
-export type PracticeItem={id:string;prompt:string;sources?:readonly Source[];answerSource?:Source|null;answer?:string};
+export type WebEvidence={kind:'web';id:string;title:string;url:string;publisher?:string;category?:'official-syllabus'|'official-pyq'|'academic-reference';
+  excerpt?:string;supportingQuote?:string;status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[]};
+export type LearningSource=(Source & {kind:'uploaded';id:string})|WebEvidence;
+export type AcademicResult={sources:WebEvidence[];scope:{requested:boolean;institution?:string;officialSyllabus:boolean;officialPyq:boolean};
+  officialSearch?:{code:string;providerStatus?:number|null;cached?:boolean;attempted?:boolean}|null;webSearch?:{code:string}|null};
+
+export type PracticeItem={id:string;prompt:string;sources?:readonly Source[];officialSource?:WebEvidence;answerSource?:Source|null;answer?:string};
 type Explanation={text:string;sources:LearningSource[];generated:boolean};
 type Detail={value?:Explanation;pending?:boolean;error?:string};
-type Batch={items:PracticeItem[];pending?:boolean;error?:string;requested?:boolean};
-export type PracticeTopic={key:string;subject:string;page:BookPage;demo:boolean};
+type Batch={items:PracticeItem[];pending?:boolean;error?:string;requested?:boolean;curriculum?:WebEvidence[]};
+export type PracticeTopic={key:string;subject:string;page:BookPage;university:string;official:WebEvidence[]};
 const emptyBatch:Batch={items:[]};
 const keyText=(text:string)=>text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-export function historicalQuestions(page:BookPage):PracticeItem[]{
-  return page.questions.filter(question=>question.historical).map(question=>({
+export function historicalQuestions(topic:PracticeTopic):PracticeItem[]{
+  const uploaded=topic.page.questions.filter(question=>question.historical).map(question=>({
     id:'pyq-'+question.id,prompt:question.prompt,sources:question.sources?.length?question.sources:[question.source],answerSource:question.answerSource
   }));
+  const root=keyText(topic.page.title)===keyText(topic.subject);
+  const terms=keyText(topic.page.title).split(' ').filter(word=>word.length>3);
+  const seen=new Set(uploaded.map(item=>keyText(item.prompt)));
+  const official=topic.official.filter(source=>source.category==='official-pyq').flatMap(source=>(source.questions??[]).flatMap(prompt=>{
+    const key=keyText(prompt);
+    if(seen.has(key)||(!root&&!terms.some(word=>key.includes(word))))return [];
+    seen.add(key);return [{id:'official-'+JSON.stringify([source.url,key]),prompt,officialSource:source}];
+  }));
+  return [...official,...uploaded];
 }
 
 export function usePractice(){
@@ -33,20 +47,21 @@ export function usePractice(){
     if(requests.current.has(key)||old.items.length>=60||(initial&&old.requested))return;
     const operation=new AbortController();
     requests.current.set(key,operation);
-    setBatches(current=>({...current,[topic.key]:{items:old.items,pending:true,requested:true}}));
+    setBatches(current=>({...current,[topic.key]:{...old,pending:true,error:undefined,requested:true}}));
     try{
       let prompts:{prompt:string;answer?:string}[];
-      if(topic.demo)prompts=topic.page.questions.filter(question=>!question.historical).map(({prompt,answer})=>({prompt,answer}));
-      else{
+      let curriculum:WebEvidence[]|undefined;
+      {
         const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
-          signal:AbortSignal.any([operation.signal,AbortSignal.timeout(25000)]),
-          body:JSON.stringify({task:'practiceBatch',subject:topic.subject,topic:topic.page.title,count:Math.min(count,60-old.items.length),
-            format,exclude:[...historicalQuestions(topic.page),...old.items].map(item=>item.prompt)})});
-        const data=await response.json() as {questions?:{prompt:string}[]};
+          signal:AbortSignal.any([operation.signal,AbortSignal.timeout(47000)]),
+          body:JSON.stringify({task:'practiceBatch',subject:topic.subject,topic:topic.page.title,university:topic.university,academicGrounding:true,sources:topic.page.passages,count:Math.min(count,60-old.items.length),
+            format,exclude:[...historicalQuestions(topic),...old.items].map(item=>item.prompt)})});
+        const data=await response.json() as {questions?:{prompt:string}[];curriculum?:WebEvidence[]};
         if(!response.ok||!Array.isArray(data.questions))throw new Error('Practice questions could not load. Try again.');
         prompts=data.questions;
+        curriculum=data.curriculum??old.curriculum;
       }
-      const used=new Set([...historicalQuestions(topic.page),...old.items].map(item=>keyText(item.prompt)));
+      const used=new Set([...historicalQuestions(topic),...old.items].map(item=>keyText(item.prompt)));
       const added=prompts.flatMap(item=>{
         if(typeof item?.prompt!=='string')return [];
         const prompt=item.prompt.trim(), normalized=keyText(prompt);
@@ -54,10 +69,10 @@ export function usePractice(){
         used.add(normalized);
         return [{id:'practice-'+normalized,prompt,answer:item.answer}];
       });
-      if(!added.length)throw new Error(topic.demo?'No further example questions are available.':'No new questions were returned. Try again.');
-      if(!operation.signal.aborted)setBatches(current=>({...current,[topic.key]:{items:[...old.items,...added].slice(0,60),requested:true}}));
+      if(!added.length)throw new Error('No new questions were returned. Try again.');
+      if(!operation.signal.aborted)setBatches(current=>({...current,[topic.key]:{items:[...old.items,...added].slice(0,60),requested:true,curriculum}}));
     }catch(error){
-      if(!operation.signal.aborted)setBatches(current=>({...current,[topic.key]:{items:old.items,requested:true,
+      if(!operation.signal.aborted)setBatches(current=>({...current,[topic.key]:{...old,pending:false,requested:true,
         error:error instanceof Error&&error.name==='Error'?error.message:'Practice questions could not load. Try again.'}}));
     }finally{if(requests.current.get(key)===operation)requests.current.delete(key);}
   }
@@ -74,12 +89,10 @@ export function usePractice(){
     setDetails(current=>({...current,[key]:{pending:true}}));
     try{
       let value:Explanation;
-      if(topic.demo){
-        value={text:task==='answer'&&item?.answer?item.answer:task==='hint'?'Start by identifying the concepts named in the question.':'Use the sample question to identify the concept, then apply its rules in order.',sources:[],generated:false};
-      }else{
+      {
         const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
           signal:AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]),
-          body:JSON.stringify({task,mode:'auto',practiceExample:task==='example',topic:topic.page.title,subject:topic.subject,
+          body:JSON.stringify({task,mode:'auto',academicGrounding:true,university:topic.university,practiceExample:task==='example',topic:topic.page.title,subject:topic.subject,
             request:task==='example'?'Show one solved example of '+topic.page.title+'.':item?.prompt,
             activeQuestion:item?.prompt,hintNumber,sources:item?.answerSource?[item.answerSource]:topic.page.passages})});
         const data=await response.json() as {explanation?:string;sources?:LearningSource[];generated?:boolean};

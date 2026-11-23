@@ -57,11 +57,13 @@ export function bookOutline(analysis:Analysis,subject:string,focus:string,passag
     used.add(id);
     const group=osGroups.find(entry=>os&&entry.match.test(id));
     const questions=evidence.get(id)?.questions??[];
+    const first=questions[0];
     const words=id.split(' ').filter(word=>word.length>3);
     const relevant=passages.filter(source=>words.some(word=>normalize(source.excerpt).includes(word)));
     const sources=[...questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),
       ...(id===normalize(focus||subject)&&!relevant.length?passages:relevant)];
-    const page:BookPage={id,title,group:group?.title??outlineGroups.get(id)??'',questions,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
+    const identity=JSON.stringify([normalize(subject),id,...(first&&'topicIds' in first?(first as RankedQuestion).topicIds.slice().sort():[])]);
+    const page:BookPage={id:identity,title,group:group?.title??outlineGroups.get(id)??'',questions,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
     return [page];
   }).slice(0,16);
 }
