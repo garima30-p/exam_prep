@@ -1,6 +1,6 @@
 # in-nocent
 
-Mobile-first exam preparation with a functional analysis endpoint. The example button still opens a separate sample DBMS plan.
+Mobile-first study with notes-first revision, topic-specific practice, and a contextual Study Coach.
 
 ## Run locally
 
@@ -18,9 +18,11 @@ Vite prints the local URL. Development and production preview both mount the sam
 
 ## Try the live flow
 
-Enter a study budget such as “My OS exam is tomorrow. I have 90 minutes and I’m starting from scratch.” Attach a syllabus, past papers or notes. You can also paste explicit question lines in the same composer. Review the suggested document tags before submitting. Each citation shows the extracted excerpt and links back to the original PDF page when the attachment is still selected.
+Name a subject or attach a syllabus, past paper, or notes. Last Minute starts with concise notes. Study adds optional solved examples, practice questions, hints, and answers. Coach stays in a separate panel within the same workspace. Use Ask Coach on a question or after selecting a passage to attach context without sending a message.
 
-PDF.js tries selectable text on every attached page. English OCR processes scan pages sequentially in the browser, with live progress, cancellation, and page-level retry. Inspect the **Document processing** summary to compare questionable text against the original and save corrections. An incomplete upload needs explicit confirmation before the app generates a plan from the usable pages. Incomplete past papers are omitted from historical frequency counts. All raw PDFs remain in the browser. The upload limits are eight PDFs and 20 MB per file. The analysis request accepts up to 4 MB of extracted JSON and shows an error if the set exceeds that limit.
+The guest session lives in the open tab. Switching mode or minimizing Coach preserves uploaded files, topics, generated material, question context, conversation, and the active quiz. Reloading or starting over clears the session. Theme preferences use browser storage. No authentication is required.
+
+PDF.js tries selectable text on every attached page. English OCR processes scan pages sequentially in the browser, with live progress, cancellation, and page-level retry. Inspect the **Document processing** summary to compare questionable text against the original and save corrections. Unreadable pages remain flagged for review and only usable text goes to analysis. Incomplete past papers are omitted from historical frequency counts. Original files remain in the browser. The upload limits are eight files and 20 MB per file. The analysis request accepts up to 4 MB of extracted JSON and shows an error if the set exceeds that limit.
 
 See [DOCUMENT-PROCESSING.md](DOCUMENT-PROCESSING.md) for the three TCS502 comparisons, verification method, and OCR limitations.
 
@@ -28,8 +30,8 @@ See [DOCUMENT-PROCESSING.md](DOCUMENT-PROCESSING.md) for the three TCS502 compar
 
 - `GET /api/health` reports service availability.
 - `POST /api/analyze` accepts classified materials with per-page text, available minutes, paper rules and familiarity. It returns evidence-bearing candidates, topic weights, estimates and a preparation plan.
-- The first ten recommendations appear immediately. **Show next 10** reveals additional selected questions. When the first ten lack coverage of a requirement represented in the full plan, the app flags that gap.
-- Expand a question’s checkpoints and record an attempt as incomplete, completed, or needing revision. Completed work and out-of-plan checkpoints remain accessible under **Revisit checkpoint progress**. On checkpoint or familiarity changes, the planner samples elapsed session time and subtracts whole minutes from the last stated budget. Giving a new time in chat starts a fresh budget. “I’m mostly revising” changes effort estimates and preserves checkpoint progress. A new analysis or reload starts a new checkpoint session.
+- The learning workspace requests evidence ranking without time-based weights. MiniLM continues to group equivalent questions in the browser.
+- The existing Gemma endpoint supports bounded topic outlines, practice batches, hints, worked examples, and optional qualitative quiz feedback. Uploaded PYQs retain separate provenance.
 - `wrangler.jsonc` targets the `app` Cloudflare Worker at [app.in-nocent.workers.dev](https://app.in-nocent.workers.dev/). Wrangler serves `dist/` as static assets and routes `/api/*` to `server/worker.mjs`. The Pages Functions adapter remains available for Pages deployments.
 
 ### Cloudflare Workers Builds

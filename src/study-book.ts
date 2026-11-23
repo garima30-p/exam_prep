@@ -11,7 +11,7 @@ export type BookPage = {
 };
 
 export function studyTopic(prompt: string) {
-  return prompt.trim().match(/^(?:could you |can you |please )?(?:help me (?:study|revise)|teach me(?: about)?|explain|study|revise|learn(?: about)?)\s+([^.!?\n]{3,90})[.?!]?$/i)?.[1]?.trim() ?? '';
+  return prompt.trim().match(/^(?:could you |can you |please )?(?:help me (?:study|revise|prepare for)|teach me(?: about)?|explain|study|revise|learn(?: about)?)\s+([^.!?\n]{3,90})[.?!]?$/i)?.[1]?.trim() ?? '';
 }
 
 const normalize=(text:string)=>text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
@@ -27,7 +27,7 @@ export function learningSubject(text:string,fallback='') {
   return fallback||subject.replace(/\b\w/g,letter=>letter.toUpperCase());
 }
 
-export function bookOutline(analysis:Analysis,subject:string,focus:string,passages:readonly Source[]) {
+export function bookOutline(analysis:Analysis,subject:string,focus:string,passages:readonly Source[], outline:readonly {title:string;group:string}[]=[]) {
   const os=studySubject(subject)==='operating systems';
   const evidence=new Map<string,{title:string;questions:Question[];score:number}>();
   const candidates=analysis.optimization?.candidates??analysis.questions;
@@ -41,14 +41,15 @@ export function bookOutline(analysis:Analysis,subject:string,focus:string,passag
   }
   const ranked=[...evidence.values()].sort((a,b)=>b.score-a.score);
   const titles=[focus||subject];
+  const outlineGroups=new Map(outline.map(item=>[normalize(item.title),item.group]));
   if(os&&!focus){
     for(const group of osGroups){
-      const related=ranked.filter(entry=>group.match.test(normalize(entry.title)));
-      if(!related.length&&!group.topics.length)continue;
-      titles.push(group.title,...(related.length?related.map(entry=>entry.title):group.topics));
+      const related=[...ranked,...outline].filter(entry=>group.match.test(normalize(entry.title)));
+      const children=related.length?related.map(entry=>entry.title):outline.length?[]:group.topics;
+      if(children.length)titles.push(group.title,...children);
     }
   }
-  titles.push(...ranked.map(entry=>entry.title));
+  titles.push(...outline.map(entry=>entry.title),...ranked.map(entry=>entry.title));
   const used=new Set<string>();
   return titles.flatMap(title=>{
     const id=normalize(title);
@@ -60,7 +61,7 @@ export function bookOutline(analysis:Analysis,subject:string,focus:string,passag
     const relevant=passages.filter(source=>words.some(word=>normalize(source.excerpt).includes(word)));
     const sources=[...questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),
       ...(id===normalize(focus||subject)&&!relevant.length?passages:relevant)];
-    const page:BookPage={id,title,group:group?.title??'',questions,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
+    const page:BookPage={id,title,group:group?.title??outlineGroups.get(id)??'',questions,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
     return [page];
   }).slice(0,16);
 }

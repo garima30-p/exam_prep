@@ -492,7 +492,7 @@ it('uses a book page as context without letting it ground an unrelated follow-up
   expect(run.mock.calls[0][1]).not.toHaveProperty('response_format');
 });
 
-it('uses distinct learning depths without sending an invented study duration to Gemma',async()=>{
+it('keeps the Study introduction short and sends only volunteered time to Gemma',async()=>{
   const {env,run}=setup();
   run.mockResolvedValue({response:'A process is a running program.'});
   for(const [learningMode,minutes] of [['last-minute',undefined],['study',5]]){
@@ -500,9 +500,37 @@ it('uses distinct learning depths without sending an invented study duration to 
       request:'Teach process management.',topic:'Process Management',topics:['Process Management'],subject:'Operating Systems'}),env);
     expect(response.status).toBe(200);
   }
-  const [compact,deep]=run.mock.calls.map(([,request])=>request);
-  expect(compact.max_completion_tokens).toBeLessThan(deep.max_completion_tokens);
-  expect(compact.messages[0].content).toContain('assume a beginner');
-  expect(compact.messages[0].content).not.toContain('"minutes":');
-  expect(deep.messages[0].content).toContain('"minutes":5');
+  const [revision,introduction]=run.mock.calls.map(([,request])=>request);
+  expect(introduction.max_completion_tokens).toBeLessThan(revision.max_completion_tokens);
+  expect(introduction.messages[0].content).toContain('Leave worked examples and exercises');
+  expect(revision.messages[0].content).toContain('assume a beginner');
+  expect(revision.messages[0].content).not.toContain('"minutes":');
+  expect(introduction.messages[0].content).toContain('"minutes":5');
+});
+
+it('deduplicates requested batches and returns only generated prompt text',async()=>{
+  const {env,run}=setup();
+  run.mockResolvedValueOnce({response:{questions:[
+    {question:'Explain why second normal form prevents partial dependencies.'},
+    {question:'Compare second and third normal form using one dependency.',historical:true},
+    {question:'Compare second and third normal form using one dependency.'}
+  ]}});
+  const response=await handle(post('coach',{task:'practiceBatch',subject:'DBMS',topic:'Normalization',count:3,
+    exclude:['Explain why second normal form prevents partial dependencies.']}),env);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({questions:[{prompt:'Compare second and third normal form using one dependency.'}]});
+  expect(run).toHaveBeenCalledTimes(1);
+});
+
+it('gives a contextual starting hint precedence over earlier conversation',async()=>{
+  const {env,run}=setup();
+  run.mockResolvedValueOnce({response:'Start by identifying the composite key.'});
+  const response=await handle(post('coach',{task:'chat',mode:'auto',request:'How do I start this?',subject:'DBMS',
+    topic:'Normalization',activeQuestion:'Identify whether this relation violates 2NF.',
+    history:[{role:'user',content:'What is SQL?'},{role:'assistant',content:'SQL queries tables.'}]}),env);
+  expect(response.status).toBe(200);
+  const system=run.mock.calls[0][1].messages[0].content;
+  expect(system).toContain('explicit selected question has precedence');
+  expect(system).toContain('without revealing the complete solution');
+  expect(system).toContain('Identify whether this relation violates 2NF.');
 });

@@ -17,22 +17,27 @@ import { inspectStudyInput } from './study-input';
 import { bookOutline, learningSubject, studySessionPrompt, studyTopic } from './study-book';
 import type { BookPage } from './study-book';
 import { ReviewForm, reviewItems } from './learning-review';
-import type { ReviewItem } from './learning-review';
+import type { ReviewAttempt, ReviewItem } from './learning-review';
+import { usePractice } from './practice';
+import type { LearningSource, PracticeItem, PracticeTopic } from './practice';
+import { PracticeQuestions, SolvedExample } from './practice-panel';
 import './style.css';
 
 const sample = 'Teach me the essentials of DBMS.';
+const subjectKey=(label:string)=>(learningSubject(label)||label).toLowerCase();
 const documentKinds=['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'];
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
 type Page = 'pricing'|'privacy'|'terms';
 type PreparationMode = 'last-minute'|'study';
 type BookContent = {text:string;references:CoachSource[];webLimited:boolean;excerpt?:boolean};
-type Discussion = {title:string;text:string;sources:readonly Source[]};
+type Discussion = {title:string;text:string;sources:readonly Source[];question?:PracticeItem;pageId?:string};
 
-type CoachSource = (Source & {kind:'uploaded';id:string}) | {kind:'web';id:string;title:string;url:string};
+type CoachSource=LearningSource;
 type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subject:string;topics:string[];studyPage?:{title:string;text:string};
+  activeQuestion?:string;preparationMode:PreparationMode;
   history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
 type Message = {role:'You'|'Demo assistant'|'in-nocent';text:string;references?:CoachSource[];
-  generated?:boolean;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest};
+  generated?:boolean;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest;offer?:{topic:PracticeTopic;count:number;format:string}};
 
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'|'menu'}) {
   const paths = {
@@ -80,6 +85,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const drawerPanel=useRef<HTMLElement>(null);
   const [savedBook,setBook]=useState<{subject:string;pages:BookPage[];demo:boolean;promptKey:string}|null>(null);
   const [bookIndex,setBookIndex]=useState(0);
+  const practice=usePractice();
+  const [selectedQuestions,setSelectedQuestions]=useState<Record<string,PracticeItem>>({});
   const [bookContent,setBookContent]=useState<Record<string,BookContent>>({});
   const [bookErrors,setBookErrors]=useState<Record<string,string>>({});
   const [loadingPage,setLoadingPage]=useState<string|null>(null);
@@ -101,14 +108,26 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [result,setResult]=useState<readonly Question[]|null>(null);
   const [warnings,setWarnings]=useState<string[]>([]);
   const analyzed=useRef<{key:string;analysis:Analysis}|null>(null);
+  const activeSubject=useRef('');
+  const evidenceIds=useRef<Set<number>|null>(null);
+  const incomingEvidenceIds=useRef<number[]>([]);
   const [studied,setStudied]=useState<Record<string,boolean>>({});
   const [recallPage,setRecallPage]=useState<string|null>(null);
-  const [quiz,setQuiz]=useState<ReviewItem[]>([]);
+  const [quiz,setQuiz]=useState<{key:string;items:ReviewItem[]}|null>(null);
+  const [quizAttempts,setQuizAttempts]=useState<Record<string,ReviewAttempt>>({});
   const quizDialog=useRef<HTMLDialogElement>(null);
   const mapDialog=useRef<HTMLDialogElement>(null);
   const [messages,setMessages]=useState<Message[]>([]);
+  const [coachOpen,setCoachOpen]=useState(false);
+  const [coachDraft,setCoachDraft]=useState('');
+  const coachInput=useRef<HTMLTextAreaElement>(null);
+  const coachToggle=useRef<HTMLButtonElement>(null);
+  const coachPanel=useRef<HTMLElement>(null);
+  const studyNotes=useRef<HTMLElement>(null);
+  const [selectedText,setSelectedText]=useState('');
   const chatTranscript=useRef<HTMLDivElement>(null);
-  const revealLatest=useRef(false);
+  const coachContent=useRef<HTMLDivElement>(null);
+  const coachAtBottom=useRef(true);
   const composer=useRef<HTMLElement>(null);
   const [draft,setDraft]=useState('');
   const [assistantPending,setAssistantPending]=useState(false);
@@ -118,10 +137,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const draftFiles=files.filter(item=>draftAttachmentIds.includes(item.id));
   const newAttachments=draftFiles.length>0;
   useLayoutEffect(()=>{
-    if(!revealLatest.current)return;
-    revealLatest.current=false;
-    chatTranscript.current?.lastElementChild?.scrollIntoView?.({block:'nearest'});
-  },[messages]);
+    if(!coachAtBottom.current)return;
+    if(chatTranscript.current)chatTranscript.current.scrollTop=chatTranscript.current.scrollHeight;
+  },[messages,coachOpen]);
+  useEffect(()=>{
+    if(!coachOpen||!coachContent.current||typeof ResizeObserver!=='function')return;
+    const observer=new ResizeObserver(()=>{
+      if(coachAtBottom.current&&chatTranscript.current)chatTranscript.current.scrollTop=chatTranscript.current.scrollHeight;
+    });
+    observer.observe(coachContent.current);
+    return ()=>observer.disconnect();
+  },[coachOpen]);
   useLayoutEffect(()=>{
     const viewport=window.visualViewport;
     const section=composer.current;
@@ -130,9 +156,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const obscured=Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop);
       section.style.setProperty('--composer-inset',obscured+'px');
     };
+    const updateLauncher=()=>coachToggle.current?.style.setProperty('--composer-height',section.offsetHeight+'px');
+    const observer=typeof ResizeObserver==='function'?new ResizeObserver(updateLauncher):null;
+    observer?.observe(section);
+    updateLauncher();
     viewport.addEventListener('resize',resize);
     viewport.addEventListener('scroll',resize);
     return ()=>{
+      observer?.disconnect();
       viewport.removeEventListener('resize',resize);
       viewport.removeEventListener('scroll',resize);
     };
@@ -163,6 +194,34 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     window.addEventListener('keydown',navigate);
     return ()=>window.removeEventListener('keydown',navigate);
   },[drawerOpen]);
+  useEffect(()=>{
+    if(!coachOpen)return;
+    coachInput.current?.focus({preventScroll:true});
+    const viewport=window.visualViewport;
+    const resize=()=>{
+      const obscured=viewport?Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop):0;
+      coachPanel.current?.style.setProperty('--coach-inset',obscured+'px');
+      if(viewport)coachPanel.current?.style.setProperty('--coach-viewport',viewport.height+'px');
+    };
+    resize();
+    viewport?.addEventListener('resize',resize);
+    viewport?.addEventListener('scroll',resize);
+    return ()=>{viewport?.removeEventListener('resize',resize);viewport?.removeEventListener('scroll',resize);};
+  },[coachOpen]);
+  useEffect(()=>{
+    const select=()=>{
+      const selection=window.getSelection();
+      setSelectedText(selection?.anchorNode&&selection.focusNode&&studyNotes.current?.contains(selection.anchorNode)&&studyNotes.current.contains(selection.focusNode)
+        ?selection.toString().trim().slice(0,900):'');
+    };
+    document.addEventListener('selectionchange',select);
+    return ()=>document.removeEventListener('selectionchange',select);
+  },[]);
+  const activePractice:PracticeTopic|null=book&&activeBookPage?{key:activeBookPage.id,subject:book.subject,page:activeBookPage,demo:book.demo}:null;
+  const selectedQuestion=activeBookPage?selectedQuestions[activeBookPage.id]:undefined;
+  useEffect(()=>{
+    if(mode==='study'&&activePractice&&!practice.batches[activePractice.key]?.requested)void practice.add(activePractice,6,'',true);
+  },[mode,activePractice,practice]);
   const lessonKey=activeBookPage?mode+':'+activeBookPage.id:'';
   const activeBookContent=bookContent[lessonKey];
   useEffect(()=>{
@@ -215,6 +274,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     return ()=>URL.revokeObjectURL(url);
   },[originalFile]);
   function clearBook(){
+    practice.reset();setQuiz(null);setQuizAttempts({});
+    setSelectedQuestions({});
     bookRequest.current?.abort();bookRequest.current=null;setLoadingPage(null);
     setBook(null);setBookIndex(0);setBookContent({});setBookErrors({});setStudied({});setRecallPage(null);
   }
@@ -246,18 +307,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       familiarity:parsed.familiarity==='unknown'?context.familiarity:parsed.familiarity
     };
   }
-  function appendAssistant(text:string) {
-    setMessages(current=>[...current,{role:'in-nocent',text,status:true}]);
-  }
-  function appendUser(text:string) {
-    revealLatest.current=true;
-    setMessages(current=>[...current,{role:'You',text}]);
-    setDraft('');
-    setDraftAttachmentIds([]);
+  function clearComposer(){
+    setDraft('');setDraftAttachmentIds([]);
   }
   function requestSubject(){
     setNeedsSubject(true);
-    appendAssistant('What subject or topic should we study?');
+    setNotice('What subject or topic would you like to study?');
   }
   async function readDocuments(run:AbortController,retry=false){
     let records=documents.filter(document=>files.some(file=>file.id===document.id));
@@ -276,10 +331,29 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     controller.current=run;
     setProcessingMessage(activeApi.prepare&&files.length?'Reading attachments…':'Finding your first topic…');
     try{
-      const records=await readDocuments(run,attempt==='retry');
-      const inspected=inspectStudyInput(records,files);
-      if(records.length)setFiles(inspected.files);
-      const focus=studyTopic(inputPrompt);
+      const allRecords=await readDocuments(run,attempt==='retry');
+      const allInspected=inspectStudyInput(allRecords,files);
+      if(allRecords.length)setFiles(allInspected.files);
+      if(attempt==='normal')incomingEvidenceIds.current=draftFiles.map(item=>item.id);
+      const incomingIds=new Set(incomingEvidenceIds.current);
+      const incomingFiles=allInspected.files.filter(item=>incomingIds.has(item.id));
+      const incoming=inspectStudyInput(allRecords.filter(document=>incomingIds.has(document.id)),incomingFiles);
+      const explicit=learningSubject(inputPrompt,activeApi.parse(inputPrompt).subject);
+      const requestedSubject=explicit||incoming.subject||adjusted.subject||allInspected.subject;
+      const changingSubject=Boolean(activeSubject.current&&requestedSubject&&subjectKey(activeSubject.current)!==subjectKey(requestedSubject));
+      const scopedFiles=allInspected.files.filter(item=>{
+        const records=allRecords.filter(document=>document.id===item.id);
+        const detected=inspectStudyInput(records,[item]).subject;
+        if(!requestedSubject)return true;
+        if(detected)return subjectKey(detected)===subjectKey(requestedSubject);
+        return incomingIds.has(item.id)||!activeSubject.current||(!changingSubject&&evidenceIds.current?.has(item.id));
+      });
+      const scopedIds=new Set(scopedFiles.map(item=>item.id));
+      const records=allRecords.filter(document=>scopedIds.has(document.id));
+      const inspected=inspectStudyInput(records,scopedFiles);
+      adjusted={...adjusted,subject:requestedSubject};
+      const requestedTopic=studyTopic(inputPrompt);
+      const focus=requestedTopic.toLowerCase()===adjusted.subject.toLowerCase()?'':requestedTopic;
       const extracted=sampleMode?null:revise(focus?'':inputPrompt,records,inspected.files,adjusted.subject);
       if(records.some(document=>!documentComplete(document))&&!extracted&&
         !records.some(document=>document.pages.some(page=>page.text.trim()&&isTrusted(page)))){
@@ -304,9 +378,30 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const subject=learningSubject(adjusted.subject||inspected.subject,adjusted.subject||inspected.subject)
         ||focus||extracted?.title||analysis.questions[0]?.topic||'';
       if(!subject){requestSubject();return;}
-      const pages=bookOutline(analysis,subject,focus,extracted?.passages??[]);
+      let outline=inspected.topics.map(title=>({title,group:''}));
+      if(!outline.length&&!analysis.questions.length&&!focus&&subject!=='Operating Systems'&&!sampleMode){
+        try{
+          setProcessingMessage('Finding the main topics…');
+          const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
+            signal:AbortSignal.any([run.signal,AbortSignal.timeout(25000)]),
+            body:JSON.stringify({task:'outline',subject})});
+          const data=await response.json() as {topics?:{title:string;group:string}[]};
+          if(response.ok&&Array.isArray(data.topics))outline=data.topics;
+          else setNotice('The full topic outline is unavailable. You can still start with the subject or enter a specific topic.');
+        }catch{
+          run.signal.throwIfAborted();
+          setNotice('The full topic outline is unavailable. You can still start with the subject or enter a specific topic.');
+        }
+      }
+      const pages=bookOutline(analysis,subject,focus,extracted?.passages??[],outline);
       if(!pages.length){requestSubject();return;}
+      if(activeSubject.current&&subjectKey(activeSubject.current)!==subjectKey(subject)){
+        activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
+        setMessages([]);setCoachDraft('');
+      }
       clearBook();
+      activeSubject.current=subject;
+      evidenceIds.current=scopedIds;
       setContext(current=>({...current,subject}));
       setBook({subject,pages,demo:sampleMode,promptKey:studySessionPrompt(inputPrompt)});
       setResult(analysis.questions);setWarnings(analysis.warnings);
@@ -348,10 +443,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const suppliedMinutes=duration(text);
     if(suppliedMinutes)setContext(current=>({...current,minutes:suppliedMinutes}));
     const reply=sampleMode?activeApi.chat(text,result??[]):undefined;
-    const message:Message={role:sampleMode?'Demo assistant':'in-nocent',text:reply??'',pending:!reply};
-    appendUser(text);
-    setMessages(current=>[...current,message]);
-    if(reply)return;
+    const more=text.match(/^(?:please )?(?:generate|add|give me)\s+(\d{1,2})\s+more\s*(.*?)\s*questions\b[.!?]?$/i);
+    const requestedFormat=more?.[2].trim()||'';
+    const specificFormat=/numerical|coding|conceptual|comparison|theory|analytical|descriptive|multiple.choice/i.test(requestedFormat);
+    const fitsTopic=!requestedFormat||specificFormat||activePractice?.page.title.toLowerCase().includes(requestedFormat.toLowerCase());
+    const offer=more&&fitsTopic&&mode==='study'&&activePractice?{topic:activePractice,count:Math.min(10,Math.max(1,Number(more[1]))),
+      format:specificFormat?requestedFormat:''}:undefined;
+    const message:Message={role:sampleMode?'Demo assistant':'in-nocent',text:offer?'I can add these to '+offer.topic.page.title+'.':reply??'',pending:!reply&&!offer,offer};
+    coachAtBottom.current=true;
+    setCoachDraft('');
+    setMessages(current=>[...current,{role:'You',text},message]);
+    if(reply||offer)return;
 
     let records=documents;
     let retrievalFiles=files;
@@ -386,6 +488,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const previousQuestion=messages.filter(item=>item.role==='You').at(-1)?.text??'';
     const query=new Set((text+' '+previousQuestion+' '+(selected?.topic??'')+' '+topics.join(' ')).toLowerCase().match(/[a-z]{4,}/g)??[]);
     const retrieved=records.flatMap(document=>{
+      if(evidenceIds.current&&!evidenceIds.current.has(document.id))return [];
       const kind=retrievalFiles.find(file=>file.id===document.id)?.kind;
       if(kind==='Past paper'||kind==='Administrative'||kind==='Unreadable')return [];
       return document.pages.filter(isTrusted).flatMap(page=>page.text.split(/\n+/).map((line,index)=>({
@@ -394,10 +497,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }).map(source=>({source,score:[...new Set(source.excerpt.toLowerCase().match(/[a-z]{4,}/g)??[])].filter(word=>query.has(word)).length}))
       .filter(match=>match.score>0).sort((a,b)=>b.score-a.score).slice(0,8).map(match=>match.source);
     const unit=activeBookPage;
-    const unitDiscussion=unit&&activeBookContent?{title:unit.title,text:activeBookContent.text,sources:unit.passages}:null;
-    const target=discussion??unitDiscussion;
-    setDiscussion(null);
-    const candidates=[...retrieved,selected?.answerSource,...(target?.sources??[])]
+    const unitDiscussion:Discussion|null=unit&&activeBookContent?{title:unit.title,text:activeBookContent.text,sources:unit.passages}:null;
+    const explicitTarget=discussion?.pageId===unit?.id?discussion:null;
+    const target=explicitTarget??unitDiscussion;
+    const question=explicitTarget?explicitTarget.question:mode==='study'?selectedQuestion:undefined;
+    const candidates=[question?.answerSource,...(target?.sources??[]),...retrieved,selected?.answerSource]
       .filter((candidate):candidate is Source=>Boolean(candidate));
     const sources=[...new Map(candidates.map(candidate=>[candidate.excerpt,candidate])).values()].slice(0,12);
     const history:CoachRequest['history']=[];
@@ -408,29 +512,35 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
     }
     void askAssistant(message,{request:text,mode:'auto',task:/\bmarks?\b/i.test(text)?'exam':'chat',
-      topic:target?.title??selected?.topic,subject,topics,
+      topic:target?.title??selected?.topic,subject,topics,preparationMode:mode,activeQuestion:question?.prompt,
       studyPage:target?{title:target.title,text:target.text.slice(0,1400)}:undefined,
       history:history.slice(-6),sources,minutes:suppliedMinutes||context.minutes});
   }
   function discuss(target:Discussion){
-    setDiscussion(target);
-    workspaceInput.current?.focus();
+    setDiscussion({...target,pageId:activeBookPage?.id});
+    setCoachOpen(true);
+    if(coachOpen)coachInput.current?.focus({preventScroll:true});
+  }
+  function minimizeCoach(){
+    setCoachOpen(false);
+    coachToggle.current?.focus({preventScroll:true});
+  }
+  function selectPractice(item:PracticeItem){
+    if(!activeBookPage)return;
+    setSelectedQuestions(current=>({...current,[activeBookPage.id]:item}));
+    setDiscussion(null);
+  }
+  function askPractice(item:PracticeItem){
+    if(!activeBookPage)return;
+    selectPractice(item);
+    discuss({title:activeBookPage.title,text:item.prompt,sources:item.answerSource?[item.answerSource]:activeBookPage.passages,question:item});
   }
   function submitMessage(){
     if(busy||activeAssistantRequest.current)return;
     const text=draft.trim();
-    if(!discussion&&activeBookContent&&/^(?:next(?: topic| page)?|agla topic)[.!]?$/i.test(text)){
-      appendUser(text);
-      if(book&&bookIndex+1<book.pages.length)openBookPage(bookIndex+1,true);
-      else appendAssistant('You’re on the last topic. You can revisit one from the map or ask to learn something else.');
-      return;
-    }
-    if(!discussion&&activeBookContent&&/^(?:quiz(?: me| le mera)?|take quiz|test me)[.!]?$/i.test(text)){
-      appendUser(text);openQuiz();return;
-    }
-    if(!discussion&&needsSubject&&text&&!text.includes('?')&&text.length<=100){
+    if(needsSubject&&text&&!text.includes('?')&&text.length<=100){
       const adjusted={...context,subject:activeApi.parse(text).subject||text};
-      appendUser(text);
+      clearComposer();
       setContext(adjusted);
       void generate(adjusted,'continue');
       return;
@@ -440,19 +550,19 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       (!messages.length||/\b(?:attached|syllabus|my notes|study material|past paper|pyq)\b/i.test(text));
     const notes=!text.includes('?')&&text.split(/[.!\n]/).filter(line=>line.trim()).length>=2&&Boolean(revise(text,[],[],''));
     const newMaterial=newAttachments&&(!text||notes||examRequest||summaryRequest||!book);
-    const studyRequest=(/^teach me\b/i.test(text)&&Boolean(studyTopic(text)))||(!book&&Boolean(learningSubject(text))&&!text.includes('?'));
+    const studyRequest=(/^teach me\b/i.test(text)&&Boolean(studyTopic(text)))||((!book||/\b(?:exam|paper) (?:preparation|revision|hai)\b/i.test(text))&&Boolean(learningSubject(text))&&!text.includes('?'));
     const preparation=newMaterial||examRequest||summaryRequest||studyRequest||(!workspaceResult&&notes)||(!text&&!workspaceResult&&(prompt||files.length));
-    if(discussion||!preparation){
-      void send(text);
+    if(!preparation){
+      setDraft('');setCoachOpen(true);void send(text);
       return;
     }
     if(!text&&!prompt&&!files.length){
       workspaceInput.current?.focus();
       return;
     }
-    const studyInput=text||prompt;
+    const studyInput=text||(newAttachments?'':prompt);
     const adjusted=preparationContext(studyInput);
-    if(text||newAttachments)appendUser(text||draftFiles.map(file=>file.file.name).join(', '));
+    clearComposer();
     setDiscussion(null);
     setPrompt(studyInput);
     setContext(adjusted);
@@ -475,10 +585,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     dialog.current?.showModal();
   }
   function reset(){
-    clearBook();analyzed.current=null;
+    clearBook();analyzed.current=null;activeSubject.current='';evidenceIds.current=null;incomingEvidenceIds.current=[];
     activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
     setExampleMode(false);setResult(null);setWarnings([]);
-    setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setDraft('');setContext(empty);
+    setMessages([]);setCoachDraft('');setCoachOpen(false);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setDraft('');setContext(empty);
     setNeedsSubject(false);setNotice('');setDiscussion(null);setDraftAttachmentIds([]);setPreviewAttachmentId(null);
   }
   function toggleExample(){
@@ -523,7 +633,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const content=bookContent[mode+':'+page.id]??bookContent['study:'+page.id]??bookContent['last-minute:'+page.id];
       return content?reviewItems(page,content.text,true):[];
     });
-    setQuiz([...items.filter(item=>item.sources).slice(0,2),...items.filter(item=>!item.sources).slice(0,4)]);
+    const key=JSON.stringify([activeBookPage?.id,...items.map(item=>item.id)]);
+    if(quiz?.key!==key)setQuiz({key,items:[...items.filter(item=>item.sources).slice(0,2),...items.filter(item=>!item.sources).slice(0,4)]});
     quizDialog.current?.showModal();
   }
   const workspaceResult=Boolean(book&&activeBookPage);
@@ -584,34 +695,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </aside>
     <main id="main" className={'wrap '+(workspaceResult?'workspace':'landing')}>
       {modeButtons('Preparation mode')}
-      <ThemeHero {...theme} headline="is baar to phod denge" guidance="Add past papers, your syllabus, or notes" compact={workspaceResult}/>
+      <ThemeHero {...theme} headline="is baar to phod denge" guidance="pyq, syllabus, notes kuch bhi h to jldi bhej" compact={workspaceResult}/>
       <div className="exam-overview">
         {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
         {!busy&&!reviewDocuments.length&&warnings.some(warning=>warning.startsWith('OCR-only'))&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ OCR evidence needs review</button>}
       </div>
-      <section className="conversation" aria-label="Conversation" hidden={!messages.length}>
-        <div className="chat-area">
-          <div className="messages" role="log" aria-label="Chat messages">
-            <div ref={chatTranscript}>
-              {messages.map((message,index)=><div className={'conversation-message '+(message.role==='You'?'message-user':'message-reply')} key={index}>
-                <span className="sr-only">{message.role}</span>
-                {message.pending?<small role="status">Thinking…</small>:message.error?
-                  <div className="coach-meta"><small role="alert">{message.error}</small>
-                    {message.retry&&<button type="button" className="link accent" disabled={assistantPending||busy} onClick={()=>retryAssistant(message)}>Retry</button>}</div>
-                  :message.role==='You'||message.status?<p>{message.text}</p>:<><CoachAnswer text={message.text}/>
-                    <SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/>
-                  </>}
-              </div>)}
-            </div>
-          </div>
-        </div>
-      </section>
       {book&&activeBookPage&&<div className="learning-layout">
         <div className="mobile-learning-actions">
           <button type="button" className="secondary" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>
           <button type="button" className="secondary" onClick={()=>mapDialog.current?.showModal()}>Topic Map</button>
         </div>
-        <section className="learning-notes" aria-label="Study notes">
+        <section ref={studyNotes} className="learning-notes" aria-label={mode==='study'?'Study workspace':'Study notes'}>
           {book.pages.map((unit,index)=>{
             const key=mode+':'+unit.id;
             const content=bookContent[key];
@@ -622,17 +716,19 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 {current&&theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={0}/>}
                 <h2 tabIndex={current?-1:undefined} ref={current?studyHeading:undefined}>{unit.title}</h2>
               </header>
+              {mode==='study'&&current&&<h3 className="study-introduction">Introduction</h3>}
               {content?<div className="learning-body">
                 <CoachAnswer text={content.text.replace(/^#{1,6}\s+([^\n]+)\n+/, (heading,title:string)=>
                   title.trim().toLowerCase()===unit.title.toLowerCase()?'':heading)}/>
                 {content.excerpt&&<p className="notice">Generated notes are unavailable. These excerpts come from your uploaded material.</p>}
                 {book.demo?<small>Demo</small>:<SourceStatus references={content.references} generated={!content.excerpt} openSource={reference=>open(null,reference)}/>}
                 {current&&<div className="lesson-actions">
-                  <button type="button" className="link accent" onClick={()=>discuss({title:unit.title,text:content.text,sources:unit.passages})}>Ask about this topic</button>
+                  <button type="button" className="link accent" onPointerDown={event=>{if(selectedText)event.preventDefault();}}
+                    onClick={()=>discuss({title:unit.title,text:selectedText||content.text,sources:unit.passages})}>Ask Coach{selectedText?' about selection':''}</button>
                   {mode==='last-minute'&&<button type="button" className="link accent" onClick={()=>selectMode('study')}>Explore deeper</button>}
-                  {recallPage!==key&&<button type="button" className="link accent" onClick={()=>{rememberTopic();setRecallPage(key);}}>Quick Recall</button>}
+                  {mode==='last-minute'&&recallPage!==key&&<button type="button" className="link accent" onClick={()=>{rememberTopic();setRecallPage(key);}}>Quick Recall</button>}
                 </div>}
-                {current&&recallPage===key&&<section aria-label="Quick Recall" className="quick-recall">
+                {mode==='last-minute'&&current&&recallPage===key&&<section aria-label="Quick Recall" className="quick-recall">
                   <p>Thoda yaad bhi kar lein? 🙂</p>
                   <ReviewForm key={key} items={reviewItems(unit,content.text,false)} openSource={reference=>open(null,reference)}/>
                   <button type="button" className="link" onClick={()=>setRecallPage(null)}>Back to notes</button>
@@ -641,6 +737,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 <p role="alert">{bookErrors[key]}</p>
                 <button type="button" className="secondary" onClick={()=>setBookErrors(({[key]:_,...rest})=>rest)}>Retry topic</button>
               </>:<p role="status">Preparing notes…</p>}
+              {current&&activePractice&&<SolvedExample key={lessonKey} topic={activePractice} practice={practice}
+                askCoach={text=>discuss({title:unit.title,text:selectedText||text,sources:unit.passages})}
+                renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated)=>
+                  <SourceStatus references={references} generated={generated} openSource={reference=>open(null,reference)}/>}/>}
+              {current&&mode==='study'&&activePractice&&<PracticeQuestions key={unit.id} topic={activePractice} practice={practice}
+                selected={selectedQuestion?.id} selectQuestion={selectPractice} askCoach={askPractice} openSource={reference=>open(null,reference)}
+                renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated)=>
+                  <SourceStatus references={references} generated={generated} openSource={reference=>open(null,reference)}/>}/>}
             </article>;
           })}
           {mode==='study'?<nav className="book-pagination" aria-label="Study pages">
@@ -657,9 +761,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </aside>
       </div>}
       <section ref={composer} aria-label="Message composer" className="setup unified-composer">
-        {discussion&&<div className="discussion-context"><span>Discussing {discussion.title}</span>
-          <button type="button" className="icon-btn" aria-label="Clear discussion context" onClick={()=>setDiscussion(null)}><Icon name="close"/></button>
-        </div>}
         <form onSubmit={event=>{event.preventDefault();submitMessage();}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
           <label htmlFor="prompt" className="sr-only">Ask a question or paste notes</label>
           <textarea ref={workspaceInput} id="prompt" value={draft} onChange={event=>setDraft(event.target.value)}
@@ -681,17 +782,66 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(context,'retry')}>Retry unread files</button>}
       </section>
     </main>
+    <button ref={coachToggle} type="button" className="secondary coach-toggle" aria-expanded={coachOpen} aria-controls="study-coach-panel"
+      onClick={()=>coachOpen?minimizeCoach():setCoachOpen(true)}><Icon name="spark"/> Coach</button>
+    <aside ref={coachPanel} id="study-coach-panel" className="coach-panel" aria-labelledby="coach-panel-title" hidden={!coachOpen}
+      onKeyDown={event=>{if(event.key==='Escape'){event.stopPropagation();minimizeCoach();}}}>
+      <header className="info-heading"><h2 id="coach-panel-title">Study Coach</h2>
+        <button type="button" className="icon-btn" aria-label="Minimize Coach" onClick={minimizeCoach}><Icon name="close"/></button>
+      </header>
+      {book&&<nav className="coach-tools" aria-label="Coach workspace tools">
+        <button type="button" className="link" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>
+        <button type="button" className="link" onClick={()=>mapDialog.current?.showModal()}>Topic Map</button>
+        <button type="button" className="link" onClick={()=>infoDialog.current?.showModal()}>Sources</button>
+      </nav>}
+      {(discussion||activeBookPage)&&<div className="coach-context">
+        <span>{discussion?.question?'Selected question':discussion?'Reference':'Current topic'} · {discussion?.title??activeBookPage?.title}</span>
+        {discussion&&<button type="button" className="link" onClick={()=>setDiscussion(null)}>Clear reference</button>}
+      </div>}
+      <div className="coach-messages" ref={chatTranscript} role="log" aria-label="Coach messages" onScroll={event=>{
+        const log=event.currentTarget;
+        if(coachOpen)coachAtBottom.current=log.scrollHeight-log.scrollTop-log.clientHeight<50;
+      }}>
+        <div ref={coachContent}>
+        {messages.map((message,index)=><div className={'conversation-message '+(message.role==='You'?'message-user':'message-reply')} key={index}>
+          <span className="sr-only">{message.role}</span>
+          {message.pending?<small role="status">Thinking…</small>:message.error?<p role="alert">{message.error}{' '}
+            {message.retry&&<button type="button" className="link accent" disabled={assistantPending} onClick={()=>retryAssistant(message)}>Retry</button>}</p>
+            :message.role==='You'||message.offer?<p>{message.text}</p>:<><CoachAnswer text={message.text}/>
+              <SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/></>}
+          {message.offer&&<button type="button" className="secondary" disabled={mode!=='study'||activePractice?.key!==message.offer.topic.key||practice.batches[message.offer.topic.key]?.pending}
+            onClick={()=>{
+              const offer=message.offer!;
+              void practice.add(offer.topic,offer.count,offer.format);
+              setMessages(current=>current.map(item=>item===message?{...item,offer:undefined,text:'Requested more questions for '+offer.topic.page.title+'.'}:item));
+            }}>Add {message.offer.count} questions</button>}
+        </div>)}
+        </div>
+      </div>
+      <form className="coach-input" onSubmit={event=>{event.preventDefault();void send(coachDraft);}}>
+        <label htmlFor="coach-prompt" className="sr-only">Ask Study Coach</label>
+        <textarea id="coach-prompt" ref={coachInput} rows={2} maxLength={500} value={coachDraft}
+          onChange={event=>setCoachDraft(event.target.value)} placeholder="Ask about your work…"
+          onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();void send(coachDraft);}}}/>
+        <button className="primary icon-btn" type="submit" aria-label="Send to Coach" disabled={busy||assistantPending||!coachDraft.trim()}><Icon name="send"/></button>
+      </form>
+    </aside>
     <dialog ref={mapDialog} aria-labelledby="topic-map-title"><div className="dialog-content">
       <div className="info-heading"><h2 id="topic-map-title">Topic Map</h2>
         <form method="dialog"><button className="icon-btn" aria-label="Close topic map"><Icon name="close"/></button></form>
       </div>
       {topicMap}
     </div></dialog>
-    <dialog ref={quizDialog} aria-labelledby="quiz-title" onClose={()=>setQuiz([])}><div className="dialog-content">
+    <dialog ref={quizDialog} aria-labelledby="quiz-title"><div className="dialog-content">
       <div className="info-heading"><h2 id="quiz-title">Quiz</h2>
         <form method="dialog"><button className="icon-btn" aria-label="Close quiz"><Icon name="close"/></button></form>
       </div>
-      <ReviewForm items={quiz} openSource={reference=>open(null,reference)}/>
+      {quiz&&<ReviewForm key={quiz.key} items={quiz.items} subject={sampleMode?undefined:book?.subject}
+        attempt={quizAttempts[quiz.key]} onAttempt={attempt=>setQuizAttempts(current=>({...current,[quiz.key]:attempt}))}
+        revisit={title=>{
+          const index=book?.pages.findIndex(page=>page.title===title)??-1;
+          if(index>=0){quizDialog.current?.close();selectMode('study');openBookPage(index);}
+        }} openSource={reference=>open(null,reference)}/>}
       <form method="dialog"><button className="link">Back to notes</button></form>
     </div></dialog>
     <dialog ref={infoDialog} aria-labelledby="study-info-title" onClick={event=>{if(event.target===event.currentTarget)event.currentTarget.close();}}>

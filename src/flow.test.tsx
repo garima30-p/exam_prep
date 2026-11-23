@@ -38,7 +38,7 @@ it('teaches a recognized exam subject immediately and caches each learning depth
   document.body.append(host);
   const root=createRoot(host);
   const analyze=vi.fn<ExamApi['analyze']>(async()=>({questions:[],warnings:[]}));
-  const requests:{learningMode?:string;minutes?:number;topic?:string}[]=[];
+  const requests:{task?:string;learningMode?:string;minutes?:number;topic?:string}[]=[];
   vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{
     requests.push(JSON.parse(init.body));
     return Response.json({explanation:'A process is a program that is being executed. The kernel manages resources.',sources:[]});
@@ -63,9 +63,10 @@ it('teaches a recognized exam subject immediately and caches each learning depth
     expect([...host.querySelectorAll('.learning-notes h2')].map(h=>h.textContent)).toEqual(['Operating Systems','Process Management']);
     await act(async()=>button('Study').click());
     expect(host.querySelector('.book-page-number')?.textContent).toContain('Page 2');
-    expect(requests.at(-1)).toMatchObject({learningMode:'study',topic:'Process Management'});
+    expect(requests.find(request=>request.learningMode==='study')).toMatchObject({topic:'Process Management'});
+    expect(requests.find(request=>request.task==='practiceBatch')).toMatchObject({topic:'Process Management'});
     await act(async()=>button('Last Minute').click());
-    expect(requests.length).toBe(3);
+    expect(requests.length).toBe(4);
     expect(analyze).toHaveBeenCalledTimes(1);
   }finally{
     await act(async()=>root.unmount());
