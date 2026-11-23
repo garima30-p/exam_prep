@@ -695,7 +695,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </aside>
     <main id="main" className={'wrap '+(workspaceResult?'workspace':'landing')}>
       {modeButtons('Preparation mode')}
-      <ThemeHero {...theme} headline="is baar to phod denge" guidance="pyq, syllabus, notes kuch bhi h to jldi bhej" compact={workspaceResult}/>
+      <ThemeHero {...theme} compact={workspaceResult}/>
       <div className="exam-overview">
         {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
         {!busy&&!reviewDocuments.length&&warnings.some(warning=>warning.startsWith('OCR-only'))&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ OCR evidence needs review</button>}
@@ -729,7 +729,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                   {mode==='last-minute'&&recallPage!==key&&<button type="button" className="link accent" onClick={()=>{rememberTopic();setRecallPage(key);}}>Quick Recall</button>}
                 </div>}
                 {mode==='last-minute'&&current&&recallPage===key&&<section aria-label="Quick Recall" className="quick-recall">
-                  <p>Thoda yaad bhi kar lein? 🙂</p>
+                  <p>Ready for a quick recall?</p>
                   <ReviewForm key={key} items={reviewItems(unit,content.text,false)} openSource={reference=>open(null,reference)}/>
                   <button type="button" className="link" onClick={()=>setRecallPage(null)}>Back to notes</button>
                 </section>}
@@ -765,7 +765,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <label htmlFor="prompt" className="sr-only">Ask a question or paste notes</label>
           <textarea ref={workspaceInput} id="prompt" value={draft} onChange={event=>setDraft(event.target.value)}
             onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();submitMessage();}}}
-            placeholder="What are you studying?" rows={2} maxLength={8000}/>
+            placeholder="Add past papers, your syllabus, or notes" rows={2} maxLength={8000}/>
           {draftFiles.length>0 && <ul className="files">{draftFiles.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{documentKinds.map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>

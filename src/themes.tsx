@@ -183,11 +183,9 @@ function Sticker({ asset, label }: typeof props[number]) {
   </button>;
 }
 
-export function ThemeHero({theme,anime,character,transition,headline,guidance,compact}:Pick<ReturnType<typeof useTheme>,
-  'theme'|'anime'|'character'|'transition'>&{headline?:string;guidance?:string;compact:boolean}) {
+export function ThemeHero({theme,anime,character,transition,compact}:Pick<ReturnType<typeof useTheme>,
+  'theme'|'anime'|'character'|'transition'>&{compact:boolean}) {
   return <section className="hero">
-    {headline&&<h1>{headline}</h1>}
-    {guidance&&<p>{guidance}</p>}
     {!compact&&anime&&character&&<CharacterScene key={character.id} anime={anime} character={character}/>}
     {!compact&&theme==='cute'&&<div className="cute-desk">{props.map(prop=><Sticker key={prop.asset} {...prop}/>)}</div>}
     {theme!=='minimal'&&transition>0&&<span key={transition} className="theme-transition" aria-hidden="true"/>}
