@@ -1,41 +1,33 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { createRoot } from 'react-dom/client';
-import { demoApi, duration, fitQuestions, materialType } from './api';
+import { demoApi, duration, materialType } from './api';
 import type { Analysis, Context, ExamApi, Material, Question, Source } from './api';
-import { familiarityFrom, makeLearningPlan } from '../server/learning.mjs';
-import type { CheckpointState, Progress } from '../server/learning.mjs';
 import { countQuestions } from '../server/page-text.mjs';
 import { documentComplete, isTrusted } from './document-state';
 import type { ExtractedDocument } from './document-state';
 import { DocumentReview } from './document-review';
 import { acceptedDocuments, documentFormat, documentLocation, originalDocumentLink } from './document-formats';
 import { StudyCharacter, ThemeHero, ThemePicker, useTheme } from './themes';
-import { buildStudyPack, familiarityLabels, sourceLabel } from './study-pack';
+import { sourceLabel } from './study-pack';
+import type { StudyPack } from './study-pack';
 import { DownloadStudyPack } from './study-output';
-import { revise, revisionFromAnswer } from './revision';
-import type { Revision } from './revision';
+import { revise } from './revision';
 import { inspectStudyInput } from './study-input';
-import { prepareScope } from './preparation-scope';
-import { bookOutline, studySessionPrompt, studyTopic } from './study-book';
+import { bookOutline, learningSubject, studySessionPrompt, studyTopic } from './study-book';
 import type { BookPage } from './study-book';
-import type { PreparationScope } from './preparation-scope';
+import { ReviewForm, reviewItems } from './learning-review';
+import type { ReviewItem } from './learning-review';
 import './style.css';
 
-const sample = "My DBMS exam is tomorrow. I have 5 hours and need 40/100 to pass. Tell me what to prepare first.";
+const sample = 'Teach me the essentials of DBMS.';
 const documentKinds=['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'];
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
-const preparationLabels={completed:'Checkpoints completed',revision:'Needs revision','in-progress':'In progress','not-started':'Not started'};
 type Page = 'pricing'|'privacy'|'terms';
 type PreparationMode = 'last-minute'|'study';
-type BookContent = {text:string;references:CoachSource[];webLimited:boolean};
+type BookContent = {text:string;references:CoachSource[];webLimited:boolean;excerpt?:boolean};
 type Discussion = {title:string;text:string;sources:readonly Source[]};
 
-function practiceSeed(id:number,topic:string,answerSource?:Source):Question {
-  return {id,topic,prompt:'What are the key points to remember about '+topic+'?',minutes:0,marks:0,unit:0,
-    reason:'Based on your current study topic',answer:'',practiceSeed:true,answerSource,
-    source:answerSource??{file:'',page:0,number:'',excerpt:''},sources:answerSource?[answerSource]:[]};
-}
 type CoachSource = (Source & {kind:'uploaded';id:string}) | {kind:'web';id:string;title:string;url:string};
 type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subject:string;topics:string[];studyPage?:{title:string;text:string};
   history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
@@ -76,7 +68,6 @@ function SourceStatus({references,openSource,generated=true}:{
 
 export function App({api=demoApi}:{api?:ExamApi}) {
   const theme = useTheme();
-  const [characterPulse,setCharacterPulse]=useState(0);
   const [exampleMode,setExampleMode]=useState(false);
   const activeApi=exampleMode?demoApi:api;
   const sampleMode=activeApi===demoApi;
@@ -101,51 +92,23 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [context,setContext]=useState(empty);
   const [files,setFiles]=useState<Material[]>([]);
   const [notice,setNotice]=useState('');
-  const [needsTime,setNeedsTime]=useState(false);
   const [busy,setBusy]=useState(false);
   const [documents,setDocuments]=useState<ExtractedDocument[]>([]);
   const [processingMessage,setProcessingMessage]=useState('');
   const [awaitReview,setAwaitReview]=useState(false);
   const controller=useRef<AbortController|null>(null);
-  const [planGenerated,setPlanGenerated]=useState(false);
-  const [revision,setRevision]=useState<Revision|null>(null);
-  const [showQuestions,setShowQuestions]=useState(false);
-  const questionsHeading=useRef<HTMLHeadingElement>(null);
-  useEffect(()=>{
-    if(!showQuestions)return;
-    questionsHeading.current?.focus({preventScroll:true});
-    questionsHeading.current?.scrollIntoView?.({block:'start'});
-  },[showQuestions]);
-  const [aiNote,setAiNote]=useState('');
-  const [aiReferences,setAiReferences]=useState<CoachSource[]>([]);
-  const resultHeading=useRef<HTMLHeadingElement>(null);
-  useEffect(()=>{
-    if(planGenerated&&mode==='last-minute'){
-      resultHeading.current?.focus({preventScroll:true});
-      resultHeading.current?.scrollIntoView?.({block:'start'});
-    }
-  },[planGenerated,mode]);
   const [dragging,setDragging]=useState(false);
   const [result,setResult]=useState<readonly Question[]|null>(null);
   const [warnings,setWarnings]=useState<string[]>([]);
-  const [optimization,setOptimization]=useState<{data:NonNullable<Analysis['optimization']>}|null>(null);
-  const [preparedScope,setPreparedScope]=useState<PreparationScope|null>(null);
-  const [practice,setPractice]=useState<Record<number,string>>({});
-  const [practiceUnavailable,setPracticeUnavailable]=useState<Record<number,boolean>>({});
-  const [practicePending,setPracticePending]=useState(false);
-  const practiceRun=useRef<AbortController|null>(null);
   const analyzed=useRef<{key:string;analysis:Analysis}|null>(null);
-  const [questionAnswers,setQuestionAnswers]=useState<Record<string,{text?:string;references?:CoachSource[];generated?:boolean;pending?:boolean;error?:boolean}>>({});
-  const pendingAnswers=useRef(new Set<string>());
-  const [progress,setProgress]=useState<Progress>({});
-  const [elapsed,setElapsed]=useState(0);
-  const timeAnchor=useRef(Date.now());
+  const [studied,setStudied]=useState<Record<string,boolean>>({});
+  const [recallPage,setRecallPage]=useState<string|null>(null);
+  const [quiz,setQuiz]=useState<ReviewItem[]>([]);
+  const quizDialog=useRef<HTMLDialogElement>(null);
+  const mapDialog=useRef<HTMLDialogElement>(null);
   const [messages,setMessages]=useState<Message[]>([]);
-  const chatLog=useRef<HTMLDivElement>(null);
   const chatTranscript=useRef<HTMLDivElement>(null);
-  const followChat=useRef(true);
   const revealLatest=useRef(false);
-  const [showLatest,setShowLatest]=useState(false);
   const composer=useRef<HTMLElement>(null);
   const [draft,setDraft]=useState('');
   const [assistantPending,setAssistantPending]=useState(false);
@@ -154,26 +117,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [draftAttachmentIds,setDraftAttachmentIds]=useState<number[]>([]);
   const draftFiles=files.filter(item=>draftAttachmentIds.includes(item.id));
   const newAttachments=draftFiles.length>0;
-  function scrollChatToLatest(){
-    followChat.current=true;
-    if(chatLog.current)chatLog.current.scrollTop=chatLog.current.scrollHeight;
-    setShowLatest(false);
-  }
   useLayoutEffect(()=>{
-    if(followChat.current)scrollChatToLatest();
-    if(revealLatest.current){
-      revealLatest.current=false;
-      chatLog.current?.scrollIntoView?.({block:'nearest'});
-    }
+    if(!revealLatest.current)return;
+    revealLatest.current=false;
+    chatTranscript.current?.lastElementChild?.scrollIntoView?.({block:'nearest'});
   },[messages]);
-  useLayoutEffect(()=>{
-    if(!chatTranscript.current||typeof ResizeObserver!=='function')return;
-    const observer=new ResizeObserver(()=>{
-      if(followChat.current)scrollChatToLatest();
-    });
-    observer.observe(chatTranscript.current);
-    return ()=>observer.disconnect();
-  },[]);
   useLayoutEffect(()=>{
     const viewport=window.visualViewport;
     const section=composer.current;
@@ -189,8 +137,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       viewport.removeEventListener('scroll',resize);
     };
   },[]);
-  const [summaryWebLimited,setSummaryWebLimited]=useState(false);
-  const [limit,setLimit]=useState(10);
   const [page,setPage]=useState<Page|null>(null);
   const [source,setSource]=useState<Source|null>(null);
   const [sourceUrl,setSourceUrl]=useState('');
@@ -217,41 +163,51 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     window.addEventListener('keydown',navigate);
     return ()=>window.removeEventListener('keydown',navigate);
   },[drawerOpen]);
+  const lessonKey=activeBookPage?mode+':'+activeBookPage.id:'';
+  const activeBookContent=bookContent[lessonKey];
   useEffect(()=>{
-    if(mode!=='study'||!activeBookPage)return;
+    if(!activeBookPage)return;
     studyHeading.current?.focus({preventScroll:true});
     studyHeading.current?.scrollIntoView?.({block:'start'});
   },[activeBookPage,mode]);
   useEffect(()=>{
-    if(mode!=='study'||!book||!activeBookPage||loadingPage||bookRequest.current
-      ||bookContent[activeBookPage.id]||bookErrors[activeBookPage.id])return;
+    if(!book||!activeBookPage||loadingPage||bookRequest.current||bookContent[lessonKey]||bookErrors[lessonKey])return;
     const unit=activeBookPage;
+    const excerpts=unit.passages.slice(0,3);
     if(book.demo){
-      const question=unit.questions[0];
-      setBookContent(current=>({...current,[unit.id]:{text:question?.answer??unit.passages.map(source=>source.excerpt).join(' '),
-        references:[],webLimited:false}}));
+      const question=unit.questions.find(item=>item.answer);
+      setBookContent(current=>({...current,[lessonKey]:{text:question?.answer||(excerpts.map(source=>source.excerpt).join('\n\n')||
+        'A database stores related information. A database management system lets you define, query, and update that information.'),references:[],webLimited:false}}));
       return;
     }
     const operation=new AbortController();
     bookRequest.current=operation;
-    setLoadingPage(unit.id);
+    setLoadingPage(lessonKey);
     void (async()=>{
       try{
         const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
           signal:AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]),
-          body:JSON.stringify({task:'notes',mode:'auto',studyUnit:true,subject:book.subject,topics:[unit.title],topic:unit.title,
-            request:'Teach '+unit.title+' as one self-contained study-book section. Define the essentials, explain how they work, and include one useful example or recall prompt if supported.',
-            priorities:unit.questions.map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages})});
+          body:JSON.stringify({task:'notes',mode:'auto',studyUnit:true,learningMode:mode,minutes:context.minutes||undefined,
+            subject:book.subject,topics:[unit.title],topic:unit.title,
+            request:'Teach '+unit.title+' to a beginner. Start with the foundation, explain the essential ideas and relationships, then give a short takeaway.',
+            priorities:unit.questions.slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages})});
         const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
-        if(!response.ok||!data.explanation?.trim())throw new Error(data.code==='usage_limit'?'The AI usage limit has been reached. Try this page again later.':'This page could not be generated. Try again.');
-        if(!operation.signal.aborted)setBookContent(current=>({...current,[unit.id]:{text:data.explanation!,references:data.sources??[],webLimited:Boolean(data.webSearch&&data.webSearch.code!=='ok')}}));
+        if(!response.ok||!data.explanation?.trim()){
+          throw new Error(data.code==='usage_limit'?'The AI usage limit has been reached.':data.code==='citation_validation_failed'
+            ?'The generated notes could not be source-verified.':'This topic could not be generated.');
+        }
+        if(!operation.signal.aborted)setBookContent(current=>({...current,[lessonKey]:{text:data.explanation!,references:data.sources??[],webLimited:Boolean(data.webSearch&&data.webSearch.code!=='ok')}}));
       }catch(error){
-        if(!operation.signal.aborted)setBookErrors(current=>({...current,[unit.id]:error instanceof Error&&error.name==='Error'?error.message:'This page could not be generated. Try again.'}));
+        if(operation.signal.aborted)return;
+        if(excerpts.length)setBookContent(current=>({...current,[lessonKey]:{text:excerpts.map(source=>source.excerpt).join('\n\n'),
+          references:excerpts.map((source,index)=>({...source,kind:'uploaded',id:'excerpt-'+index})),
+          webLimited:false,excerpt:true}}));
+        else setBookErrors(current=>({...current,[lessonKey]:error instanceof Error&&error.name==='Error'?error.message:'This topic could not be generated.'}));
       }finally{
         if(bookRequest.current===operation){bookRequest.current=null;setLoadingPage(null);}
       }
     })();
-  },[activeBookPage,book,bookContent,bookErrors,loadingPage,mode]);
+  },[activeBookPage,book,bookContent,bookErrors,loadingPage,lessonKey,mode,context.minutes]);
   useEffect(()=>{
     if(!originalFile){setSourceUrl('');return;}
     const url=URL.createObjectURL(originalFile);
@@ -260,7 +216,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   },[originalFile]);
   function clearBook(){
     bookRequest.current?.abort();bookRequest.current=null;setLoadingPage(null);
-    setBook(null);setBookIndex(0);setBookContent({});setBookErrors({});
+    setBook(null);setBookIndex(0);setBookContent({});setBookErrors({});setStudied({});setRecallPage(null);
   }
   const attachment = (incoming:FileList|null) => {
     if (!incoming || busy) return;
@@ -274,7 +230,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
     setFiles([...files,...accepted]);
     if(accepted.length){
-      clearBook();setPlanGenerated(false);setAwaitReview(false);
+      clearBook();setAwaitReview(false);
       setDraftAttachmentIds(current=>[...current,...accepted.map(item=>item.id)]);
     }
     setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 files of 20 MB each. Use PDF, DOCX, PPTX, PNG, JPEG, WebP, or BMP. Save older .ppt files as .pptx.' : '');
@@ -282,7 +238,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   function preparationContext(value:string):Context {
     const parsed=activeApi.parse(value);
     return {
-      subject:parsed.subject||context.subject,
+      subject:learningSubject(value,parsed.subject)||context.subject,
       date:parsed.date||context.date,
       minutes:parsed.minutes||context.minutes,
       pass:parsed.pass||context.pass,
@@ -294,7 +250,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setMessages(current=>[...current,{role:'in-nocent',text,status:true}]);
   }
   function appendUser(text:string) {
-    followChat.current=true;
     revealLatest.current=true;
     setMessages(current=>[...current,{role:'You',text}]);
     setDraft('');
@@ -304,14 +259,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setNeedsSubject(true);
     appendAssistant('What subject or topic should we study?');
   }
-  const restartBudget=()=>{timeAnchor.current=Date.now();setElapsed(0);};
-  const update=<K extends keyof Context,>(key:K,value:Context[K])=>{
-    if(key==='minutes')restartBudget();
-    if(key==='subject')clearBook();
-    if(!sampleMode){practiceRun.current?.abort();setPracticePending(false);}
-    setContext(current=>({...current,[key]:value}));
-    if(!sampleMode||key!=='minutes'&&key!=='familiarity')setPlanGenerated(false);
-  };
   async function readDocuments(run:AbortController,retry=false){
     let records=documents.filter(document=>files.some(file=>file.id===document.id));
     if(activeApi.prepare&&files.length&&(retry||files.some(file=>!records.some(document=>document.id===file.id)))){
@@ -323,154 +270,54 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     return records;
   }
   async function generate(adjusted=context,attempt:'normal'|'retry'|'continue'='normal',inputPrompt=prompt) {
-    if(controller.current) return;
-    if(!inputPrompt.trim() && !files.length) {setNotice('Describe your exam or attach a file to begin.');return;}
-    const studying=mode==='study';
-    if(!studying&&!adjusted.minutes){
-      if(!needsTime)appendAssistant('How many minutes can you study?');
-      setNeedsTime(true);
-      return;
-    }
-    if(studying)adjusted={...adjusted,minutes:0};
-    if(!studying)setNeedsTime(false);
+    if(controller.current||(!inputPrompt.trim()&&!files.length))return;
     setNeedsSubject(false);setNotice('');setBusy(true);
     const run=new AbortController();
     controller.current=run;
-    setProcessingMessage(activeApi.prepare&&files.length?'Opening attachments…':'Building your plan…');
-    try {
+    setProcessingMessage(activeApi.prepare&&files.length?'Reading attachments…':'Finding your first topic…');
+    try{
       const records=await readDocuments(run,attempt==='retry');
-      if(records.some(document=>!documentComplete(document))&&!revise(inputPrompt,records,files,adjusted.subject)
-        &&!records.some(document=>document.pages.some(page=>page.text.trim()&&isTrusted(page)))){
+      const inspected=inspectStudyInput(records,files);
+      if(records.length)setFiles(inspected.files);
+      const focus=studyTopic(inputPrompt);
+      const extracted=sampleMode?null:revise(focus?'':inputPrompt,records,inspected.files,adjusted.subject);
+      if(records.some(document=>!documentComplete(document))&&!extracted&&
+        !records.some(document=>document.pages.some(page=>page.text.trim()&&isTrusted(page)))){
         setNotice('No readable material was found. Check the original or retry the attachment.');
         setAwaitReview(true);
         return;
       }
-      run.signal.throwIfAborted();
       setAwaitReview(false);
-      setProcessingMessage('Building your plan…');
-      const inspected=sampleMode?{files,subject:'',topics:[]}:inspectStudyInput(records,files);
-      const classified=inspected.files;
-      if(!sampleMode&&records.length)setFiles(classified);
-      if(!adjusted.subject&&inspected.subject){
-        adjusted={...adjusted,subject:inspected.subject};setContext(current=>({...current,subject:inspected.subject}));
-      }
-      const requestedTopic=studyTopic(inputPrompt);
-      const extracted=sampleMode?null:revise(requestedTopic?'':inputPrompt,records,classified,adjusted.subject);
-      const analysisKey=JSON.stringify([studySessionPrompt(inputPrompt),classified.map(file=>[file.id,file.kind]),records]);
-      const cached=!sampleMode&&analyzed.current?.key===analysisKey?analyzed.current.analysis:null;
-      const runProgress=cached?progress:{};
-      let analysis:Analysis;
-      try {
-        analysis=cached??await activeApi.analyze(adjusted, classified, inputPrompt,{documents:records,signal:run.signal,
-          onPlanning:()=>setProcessingMessage('Matching equivalent questions and building your plan…')});
-      } catch(error) {
-        run.signal.throwIfAborted();
-        if(!extracted)throw error;
-        analysis={questions:[],warnings:['Question ranking is temporarily unavailable.']};
-      }
-      if(!cached){
-        if(!sampleMode)analyzed.current={key:analysisKey,analysis};
-        practiceRun.current?.abort();setPracticePending(false);setPractice({});setPracticeUnavailable({});setQuestionAnswers({});
-      }
-      if(studying){
-        const fallback=requestedTopic?[requestedTopic]:extracted?[extracted.title]:inspected.topics.length?inspected.topics:[adjusted.subject].filter(Boolean);
-        const pages=bookOutline(analysis,fallback,extracted?.passages??[]);
-        if(!pages.length){requestSubject();return;}
-        clearBook();
-        setBook({subject:adjusted.subject||requestedTopic,pages,demo:sampleMode,promptKey:studySessionPrompt(inputPrompt)});
-        setResult(analysis.questions);setWarnings(analysis.warnings);
-        setOptimization(analysis.optimization?{data:analysis.optimization}:null);
-        setProgress(runProgress);
-        appendAssistant('Your study outline is ready. See the first page below.');
-        return;
-      }
-      const scope=prepareScope(analysis,adjusted,runProgress);
-      const summary=extracted??revisionFromAnswer(scope.questions.find(question=>question.answerSource))
-        ??(sampleMode&&analysis.questions[0]?revise(analysis.questions[0].answer,[],[],analysis.questions[0].topic):null);
-      const topics=[...new Set(scope.questions.length?scope.questions.map(question=>question.topic):
-        summary?[summary.title]:requestedTopic?[requestedTopic]:inspected.topics)].slice(0,adjusted.minutes<=15?3:6);
-      const sources=[...new Map([...scope.questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),
-        ...(summary?.passages??[])].map(source=>[source.excerpt,source])).values()].slice(0,8);
-      if(!sampleMode&&!summary&&!adjusted.subject&&!topics.length){requestSubject();return;}
-      setAiNote('');
-      setAiReferences([]);
-      setSummaryWebLimited(false);
-      if(!sampleMode){
-        setProcessingMessage(summary?'Writing your revision summary…':'Looking for material to explain the key topics…');
-        try {
-          const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.any([run.signal,AbortSignal.timeout(50000)]),
-            body:JSON.stringify({task:'notes',mode:'auto',subject:adjusted.subject,topics,minutes:adjusted.minutes,
-              topic:scope.questions.length?topics[0]:summary?.title??(requestedTopic||adjusted.subject),request:'Write a concise revision summary for '+(requestedTopic||adjusted.subject||summary?.title||'the supplied study topics')+'.',
-              priorities:scope.questions.map(question=>({topic:question.topic,prompt:question.prompt})),sources})});
-          const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
-          if(!response.ok||!data.explanation?.trim()){
-            if(data.code==='subject_required')requestSubject();
-            else if(data.code==='citation_validation_failed')setNotice('The summary’s sources could not be verified. Try generating it again.');
-            else setNotice(data.code==='usage_limit'?'The AI usage limit has been reached. Try again later.':'AI generation failed. Please retry.');
-            return;
-          }
-          setAiNote(data.explanation);
-          setAiReferences(data.sources??[]);
-          setSummaryWebLimited(Boolean(data.webSearch&&data.webSearch.code!=='ok'));
-        }catch{
+      const key=JSON.stringify([studySessionPrompt(inputPrompt),inspected.files.map(file=>[file.id,file.kind]),records]);
+      let analysis=analyzed.current?.key===key?analyzed.current.analysis:null;
+      if(!analysis){
+        try{
+          analysis=await activeApi.analyze({...adjusted,minutes:0},inspected.files,inputPrompt,{learning:true,documents:records,signal:run.signal});
+        }catch(error){
           run.signal.throwIfAborted();
-          setNotice('AI generation failed. Please retry.');return;
+          if(!extracted&&!adjusted.subject&&!focus)throw error;
+          analysis={questions:[],warnings:['Question ranking is temporarily unavailable.']};
         }
+        analyzed.current={key,analysis};
       }
-      practiceRun.current?.abort();setPracticePending(false);
-      setRevision(summary);setShowQuestions(false);
       run.signal.throwIfAborted();
+      const subject=learningSubject(adjusted.subject||inspected.subject,adjusted.subject||inspected.subject)
+        ||focus||extracted?.title||analysis.questions[0]?.topic||'';
+      if(!subject){requestSubject();return;}
+      const pages=bookOutline(analysis,subject,focus,extracted?.passages??[]);
+      if(!pages.length){requestSubject();return;}
+      clearBook();
+      setContext(current=>({...current,subject}));
+      setBook({subject,pages,demo:sampleMode,promptKey:studySessionPrompt(inputPrompt)});
       setResult(analysis.questions);setWarnings(analysis.warnings);
-      setOptimization(analysis.optimization?{data:analysis.optimization}:null);
-      setPreparedScope(scope);setProgress(runProgress);restartBudget();setLimit(10);setPlanGenerated(true);appendAssistant('Your Must Read summary is ready below.'); }
-    catch(error) { setNotice(run.signal.aborted?'Processing cancelled. Run again to resume from usable pages.':error instanceof Error?error.message:'The study plan could not load. Try again.'); }
-    finally {controller.current=null;setProcessingMessage('');setBusy(false);}
+    }catch(error){
+      setNotice(run.signal.aborted?'Reading cancelled. Send again to resume.':error instanceof Error?error.message:'These notes could not load. Try again.');
+    }finally{
+      controller.current=null;setProcessingMessage('');setBusy(false);
+    }
   }
-  const remainingTime=mode==='study'?0:Math.max(0,context.minutes-elapsed);
-  const plan=useMemo(()=>{
-    if(!optimization)return null;
-    const {data}=optimization;
-    const candidates=mode==='last-minute'&&!sampleMode&&preparedScope?data.candidates.filter(question=>preparedScope.questions.some(item=>item.id===question.id)):data.candidates;
-    return makeLearningPlan(candidates,data.topics,remainingTime,context.pattern,context.familiarity,progress);
-  },[optimization,preparedScope,mode,sampleMode,remainingTime,context.pattern,context.familiarity,progress]);
-  const fitted=plan&&optimization
-    ? plan.selectedQuestionIds.map(id=>optimization.data.candidates.find(question=>question.id===id)!)
-    : fitQuestions(result ?? [],context.minutes);
-  const visible=(remainingTime||context.minutes?fitted:result??[]).slice(0,limit);
-  const summaryTopic=revision?.title&&revision.title!=='Key points'?revision.title:studyTopic(prompt)||context.subject||'this revision topic';
-  const lastMinuteQuestions=preparedScope?.questions.length?preparedScope.questions:
-    planGenerated?[practiceSeed(2000,summaryTopic,revision?.passages[0])]:[];
-  const bookQuestions=activeBookPage?(activeBookPage.questions.length?activeBookPage.questions:
-    [practiceSeed(3000+bookIndex,activeBookPage.title,activeBookPage.passages[0])]):[];
-  const availableQuestions=(questions:readonly Question[])=>questions.flatMap(question=>
-    practice[question.id]?[{...question,prompt:practice[question.id]}]:
-      practiceUnavailable[question.id]?[{...question,prompt:practiceSeed(question.id,question.topic).prompt}]:
-      !question.practiceSeed||sampleMode?[question]:[]);
-  const questionList=!sampleMode?availableQuestions(lastMinuteQuestions):visible.length?visible:(result??[]).slice(0,limit);
-  const questionsOutsideBudget=Boolean(!sampleMode&&!preparedScope?.review&&!visible.length&&questionList.length);
-  const plannedIds=new Set(fitted.map(question=>question.id));
-  const tracked=optimization?.data.candidates.filter(question=>!plannedIds.has(question.id)&&progress[question.id])??[];
-  const coveredUnits=[...new Set(visible.map(question=>question.unit).filter(Boolean))].sort((a,b)=>a-b);
-  const missingUnits=[...new Set(result?.map(question=>question.unit).filter(unit=>unit&&!coveredUnits.includes(unit)))].sort((a,b)=>a-b);
-  const coverageMessage = missingUnits.length ? 'Units outside the current shortlist: '+missingUnits.join(', ')+'.' : '';
-  const pack = buildStudyPack(context,remainingTime,plan,fitted,sampleMode?visible:questionList,sampleMode?optimization?.data.candidates??result??[]:questionList,
-    sampleMode,[...warnings,...(plan?.warnings??[]),coverageMessage].filter(Boolean));
-  const readMinutes=revision&&remainingTime?Math.min(remainingTime,Math.max(1,Math.ceil(revision.passages.length/2))):0;
-  if(aiNote&&!sampleMode)pack.generatedNotes={text:aiNote,references:aiReferences.map(source=>source.kind==='uploaded'?sourceLabel(source):source.title+' · '+source.url)};
-  if(revision){
-    if(sampleMode)pack.revision=revision;
-    if(readMinutes&&!pack.timeline.length)pack.timeline.push({title:revision.title+' · Read and recall',minutes:readMinutes});
-  }
-  const reviewAllocations:Record<number,number>={};
-  if(!sampleMode&&preparedScope?.review){
-    let available=Math.min(remainingTime,Math.floor(remainingTime*.9));
-    pack.timeline=preparedScope.questions.flatMap(question=>{const minutes=Math.min(available,preparedScope.allocations[question.id]??0);available-=minutes;reviewAllocations[question.id]=minutes;return minutes?[{title:question.topic+' (quick review)',minutes}]:[];});
-    if(pack.timeline.length)pack.timeline.push({title:'Active recall',minutes:Math.ceil(remainingTime*.1)});
-    pack.questions=pack.questions.map(entry=>({...entry,minutes:reviewAllocations[entry.question.id]??0}));
-  }
-  const nextAction=pack.timeline[0];
   const activeAssistantRequest=useRef<AbortController|null>(null);
-  useEffect(()=>()=>{activeAssistantRequest.current?.abort();practiceRun.current?.abort();},[]);
+  useEffect(()=>()=>{activeAssistantRequest.current?.abort();},[]);
   async function askAssistant(message:Message,request:CoachRequest) {
     if(activeAssistantRequest.current)return;
     const operation=new AbortController();
@@ -498,30 +345,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   async function send(value:string) {
     const text=value.trim();
     if(!text||controller.current||activeAssistantRequest.current)return;
-    const minutes=duration(text);
-    const familiarity=familiarityFrom(text);
-    let reply:string|undefined;
-    if(mode==='last-minute'&&result&&minutes&&/\b(left|remaining|replan|can study|I (?:only )?have)\b/i.test(text)&&!text.includes('?')){
-      if(!sampleMode){
-        const adjusted={...context,minutes,familiarity:familiarity==='unknown'?context.familiarity:familiarity};
-        appendUser(text);
-        setContext(adjusted);setPlanGenerated(false);
-        await generate(adjusted,'continue');
-        return;
-      }
-      update('minutes',minutes);setLimit(10);
-      if(familiarity!=='unknown')update('familiarity',familiarity);
-      reply='Updated the plan for '+minutes+' minutes, including time for recall.';
-    }else if(result&&familiarity!=='unknown'&&!text.includes('?')){
-      update('familiarity',familiarity);
-      setElapsed(Math.max(0,Math.floor((Date.now()-timeAnchor.current)/60000)));
-      setLimit(10);
-      reply='Updated your preparation estimates for “'+familiarityLabels[familiarity].toLowerCase()+'”. Your checkpoint progress is still available.';
-    }else if(result&&/^(?:show (?:the )?)?(?:next (?:10|ten)|more questions)[.!]?$/i.test(text)){
-      setLimit(current=>current+10);
-      reply=limit<fitted.length?'I added the next questions below.':'The current materials and study budget support '+fitted.length+' questions.';
-    }
-    if(sampleMode&&!reply)reply=activeApi.chat(text,visible.map((question,index)=>({...question,id:index+1})));
+    const suppliedMinutes=duration(text);
+    if(suppliedMinutes)setContext(current=>({...current,minutes:suppliedMinutes}));
+    const reply=sampleMode?activeApi.chat(text,result??[]):undefined;
     const message:Message={role:sampleMode?'Demo assistant':'in-nocent',text:reply??'',pending:!reply};
     appendUser(text);
     setMessages(current=>[...current,message]);
@@ -554,9 +380,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }
     }
 
-    const topics=[...new Set((optimization?.data.topics.map(topic=>topic.title)??(result??[]).map(question=>question.topic)))].slice(0,20);
+    const topics=[...new Set((book?.pages.map(page=>page.title)??(result??[]).map(question=>question.topic)))].slice(0,20);
     const numbered=text.match(/(?:#|question\s+)(\d+)/i);
-    const selected=numbered?visible[Number(numbered[1])-1]:undefined;
+    const selected=numbered?activeBookPage?.questions[Number(numbered[1])-1]:undefined;
     const previousQuestion=messages.filter(item=>item.role==='You').at(-1)?.text??'';
     const query=new Set((text+' '+previousQuestion+' '+(selected?.topic??'')+' '+topics.join(' ')).toLowerCase().match(/[a-z]{4,}/g)??[]);
     const retrieved=records.flatMap(document=>{
@@ -567,12 +393,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       })));
     }).map(source=>({source,score:[...new Set(source.excerpt.toLowerCase().match(/[a-z]{4,}/g)??[])].filter(word=>query.has(word)).length}))
       .filter(match=>match.score>0).sort((a,b)=>b.score-a.score).slice(0,8).map(match=>match.source);
-    const unit=mode==='study'&&activeBookPage&&/\b(?:this|the current) (?:page|chapter|section)\b/i.test(text)?activeBookPage:null;
-    const summaryContext=mode==='last-minute'&&planGenerated&&/\b(?:this|the current|my) (?:summary|notes)\b/i.test(text)
-      ?{title:revision?.title||context.subject||'Must Read',text:aiNote,sources:revision?.passages??[]}:null;
-    const target=discussion??(unit?{title:unit.title,text:bookContent[unit.id]?.text??'',sources:unit.passages}:summaryContext);
+    const unit=activeBookPage;
+    const unitDiscussion=unit&&activeBookContent?{title:unit.title,text:activeBookContent.text,sources:unit.passages}:null;
+    const target=discussion??unitDiscussion;
     setDiscussion(null);
-    const candidates=[...(target?.sources??[]),selected?.answerSource,...(target?[]:retrieved),...(planGenerated?revision?.passages??[]:[]),...fitted.map(question=>question.answerSource)]
+    const candidates=[...retrieved,selected?.answerSource,...(target?.sources??[])]
       .filter((candidate):candidate is Source=>Boolean(candidate));
     const sources=[...new Map(candidates.map(candidate=>[candidate.excerpt,candidate])).values()].slice(0,12);
     const history:CoachRequest['history']=[];
@@ -585,24 +410,25 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     void askAssistant(message,{request:text,mode:'auto',task:/\bmarks?\b/i.test(text)?'exam':'chat',
       topic:target?.title??selected?.topic,subject,topics,
       studyPage:target?{title:target.title,text:target.text.slice(0,1400)}:undefined,
-      history:history.slice(-6),sources,minutes:remainingTime});
+      history:history.slice(-6),sources,minutes:suppliedMinutes||context.minutes});
   }
   function discuss(target:Discussion){
     setDiscussion(target);
     workspaceInput.current?.focus();
   }
-  function submitMessage(forcePreparation=false){
+  function submitMessage(){
     if(busy||activeAssistantRequest.current)return;
     const text=draft.trim();
-    const minutes=duration(text)||(/^\d{1,6}$/.test(text)?Number(text):0);
-    if(!forcePreparation&&!discussion&&mode==='last-minute'&&needsTime&&minutes>0&&minutes<=525600){
-      const adjusted={...context,minutes};
+    if(!discussion&&activeBookContent&&/^(?:next(?: topic| page)?|agla topic)[.!]?$/i.test(text)){
       appendUser(text);
-      setContext(adjusted);
-      void generate(adjusted,'continue');
+      if(book&&bookIndex+1<book.pages.length)openBookPage(bookIndex+1,true);
+      else appendAssistant('You’re on the last topic. You can revisit one from the map or ask to learn something else.');
       return;
     }
-    if(!forcePreparation&&!discussion&&needsSubject&&text&&!text.includes('?')&&text.length<=100){
+    if(!discussion&&activeBookContent&&/^(?:quiz(?: me| le mera)?|take quiz|test me)[.!]?$/i.test(text)){
+      appendUser(text);openQuiz();return;
+    }
+    if(!discussion&&needsSubject&&text&&!text.includes('?')&&text.length<=100){
       const adjusted={...context,subject:activeApi.parse(text).subject||text};
       appendUser(text);
       setContext(adjusted);
@@ -613,19 +439,15 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const summaryRequest=/\bsummari[sz]e\b/i.test(text)&&
       (!messages.length||/\b(?:attached|syllabus|my notes|study material|past paper|pyq)\b/i.test(text));
     const notes=!text.includes('?')&&text.split(/[.!\n]/).filter(line=>line.trim()).length>=2&&Boolean(revise(text,[],[],''));
-    const newMaterial=newAttachments&&(!text||notes||examRequest||summaryRequest);
-    const studyRequest=mode==='study'&&/^teach me\b/i.test(text)&&Boolean(studyTopic(text));
+    const newMaterial=newAttachments&&(!text||notes||examRequest||summaryRequest||!book);
+    const studyRequest=(/^teach me\b/i.test(text)&&Boolean(studyTopic(text)))||(!book&&Boolean(learningSubject(text))&&!text.includes('?'));
     const preparation=newMaterial||examRequest||summaryRequest||studyRequest||(!workspaceResult&&notes)||(!text&&!workspaceResult&&(prompt||files.length));
-    if(!forcePreparation&&(discussion||!preparation)){
+    if(discussion||!preparation){
       void send(text);
       return;
     }
     if(!text&&!prompt&&!files.length){
       workspaceInput.current?.focus();
-      return;
-    }
-    if(!text&&workspaceResult){
-      (mode==='study'?studyHeading:resultHeading).current?.scrollIntoView?.({block:'start'});
       return;
     }
     const studyInput=text||prompt;
@@ -634,7 +456,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setDiscussion(null);
     setPrompt(studyInput);
     setContext(adjusted);
-    if(mode==='last-minute'||studySessionPrompt(studyInput)!==promptKey)setPlanGenerated(false);
     void generate(adjusted,'normal',studyInput);
   }
   function retryAssistant(message:Message) {
@@ -654,16 +475,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     dialog.current?.showModal();
   }
   function reset(){
-    clearBook();practiceRun.current?.abort();analyzed.current=null;setPreparedScope(null);setQuestionAnswers({});
+    clearBook();analyzed.current=null;
     activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
-    setExampleMode(false);setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);
+    setExampleMode(false);setResult(null);setWarnings([]);
     setMessages([]);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setDraft('');setContext(empty);
-    setNeedsTime(false);setNeedsSubject(false);setNotice('');setPlanGenerated(false);setDiscussion(null);setDraftAttachmentIds([]);setPreviewAttachmentId(null);
+    setNeedsSubject(false);setNotice('');setDiscussion(null);setDraftAttachmentIds([]);setPreviewAttachmentId(null);
   }
   function toggleExample(){
-    clearBook();setResult(null);setOptimization(null);setProgress({});restartBudget();setWarnings([]);setAwaitReview(false);
-    analyzed.current=null;setPreparedScope(null);setExampleMode(!exampleMode);setPrompt('');setDraft(exampleMode?'':sample);
-    setNeedsTime(false);setNeedsSubject(false);setPlanGenerated(false);setDiscussion(null);
+    clearBook();setResult(null);setWarnings([]);setAwaitReview(false);
+    analyzed.current=null;setExampleMode(!exampleMode);setPrompt('');setDraft(exampleMode?'':sample);
+    setNeedsSubject(false);setDiscussion(null);
   }
   function modifyFile(id:number,kind?:string) {
     clearBook();
@@ -672,165 +493,65 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       setDocuments(current=>current.filter(document=>document.id!==id));
       setDraftAttachmentIds(current=>current.filter(fileId=>fileId!==id));
     }
-    setAwaitReview(false);setPlanGenerated(false);
+    setAwaitReview(false);
   }
   function verifyPage(id:number,number:number,text:string){
     clearBook();
     const kind=files.find(file=>file.id===id)?.kind;
     setDocuments(current=>current.map(document=>document.id!==id?document:{...document,pages:document.pages.map(page=>page.number!==number?page:{
       ...page,text:text.trim(),status:'verified',method:'manual',questions:countQuestions(text,kind==='Past paper'),reason:''})}));
-    setPlanGenerated(false);
-  }
-  function changeCheckpoint(questionId:number,id:string,status:CheckpointState){
-    if(status==='completed'&&progress[questionId]?.[id]!=='completed') setCharacterPulse(value=>value+1);
-    setProgress(current=>({...current,[questionId]:{...current[questionId],[id]:status}}));
-    if(mode==='last-minute')setElapsed(Math.max(0,Math.floor((Date.now()-timeAnchor.current)/60000)));
-  }
-  async function revealQuestions(){
-    setShowQuestions(true);
-    await preparePractice(lastMinuteQuestions);
-  }
-  async function preparePractice(questions:readonly Question[],retry=false){
-    if(sampleMode||practiceRun.current)return;
-    const candidates=questions.filter(question=>!practice[question.id]&&(retry||!practiceUnavailable[question.id])&&question.practiceSeed&&!question.historical&&
-      !question.historicalFrequency&&!(question.sources??[question.source]).some(source=>files.some(file=>file.id===source.documentIndex&&file.kind==='Past paper')));
-    if(!candidates.length)return;
-    const operation=new AbortController();
-    practiceRun.current=operation;
-    setPracticePending(true);
-    let generated:Record<number,string>={};
-    // The model returns the position in this request. The app keeps its own question IDs.
-    const slots=new Map(candidates.map((question,index)=>[index+1,question]));
-    const priorities=Array.from(slots,([id,{topic,prompt}])=>({id,topic,prompt}));
-    try{
-      const r=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
-        signal:AbortSignal.any([operation.signal,AbortSignal.timeout(20000)]),
-        body:JSON.stringify({task:'practice',priorities})});
-      const data=await r.json() as {questions?:{id:number;prompt:string}[]};
-      if(r.ok&&Array.isArray(data.questions)&&!operation.signal.aborted){
-        const existingIds=new Set(candidates.map(question=>question.id));
-        const key=(value:string)=>value.trim().toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
-        const used=new Set(questions.filter(question=>!existingIds.has(question.id)).map(question=>key(question.prompt)));
-        for(const question of data.questions){
-          const original=slots.get(question.id);
-          if(!original||generated[original.id]||typeof question.prompt!=='string')continue;
-          const normalized=key(question.prompt);
-          if(!normalized||used.has(normalized))continue;
-          used.add(normalized);
-          generated[original.id]=question.prompt;
-        }
-      }
-    }catch{/* The recall questions remain available when AI practice fails. */}
-    finally{
-      if(practiceRun.current===operation){
-        practiceRun.current=null;setPracticePending(false);
-        if(!operation.signal.aborted){
-          setPractice(current=>({...current,...generated}));
-          setPracticeUnavailable(current=>({...current,...Object.fromEntries(candidates.map(question=>[question.id,!generated[question.id]]))}));
-        }
-      }
-    }
-  }
-  async function loadQuestionAnswer(question:Question,key:string){
-    if(pendingAnswers.current.has(key)||questionAnswers[key]?.text)return;
-    pendingAnswers.current.add(key);
-    setQuestionAnswers(current=>({...current,[key]:{pending:true}}));
-    try{
-      const references=mode==='study'&&activeBookPage?bookContent[activeBookPage.id]?.references??[]:aiReferences;
-      const sources=question.answerSource?[question.answerSource]:references.filter(reference=>reference.kind==='uploaded').slice(0,3);
-      const r=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(50000),
-        body:JSON.stringify({task:'answer',mode:'auto',request:question.prompt,topic:question.topic,subject:context.subject,
-          sources,minutes:remainingTime})});
-      const response=await r.json() as {explanation?:string;sources?:CoachSource[];generated?:boolean};
-      if(!r.ok||!response.explanation?.trim())throw new Error();
-      setQuestionAnswers(current=>({...current,[key]:{text:response.explanation,references:response.sources,generated:response.generated!==false}}));
-    }catch{setQuestionAnswers(current=>({...current,[key]:{error:true}}));}
-    finally{pendingAnswers.current.delete(key);}
-  }
-  function renderQuestion(q:Question,index?:number){
-    const effort=plan?.efforts[q.id];
-    const shortReview=!sampleMode&&preparedScope?.review&&Boolean(preparedScope.allocations[q.id]);
-    const allocation=mode==='study'?0:shortReview?reviewAllocations[q.id]:(sampleMode||plannedIds.has(q.id)?effort?.minutes??q.minutes:0);
-    const answerKey=JSON.stringify([context.subject,q.prompt,q.answerSource??null,q.sources??[q.source]]);
-    const answer=questionAnswers[answerKey];
-    const evidence=q.sources??[q.source];
-    const availableEvidence=evidence.filter(reference=>reference.file);
-    const kind=q.historical?'Previous-Year Question':evidence.some(source=>files.some(file=>file.id===source.documentIndex&&file.kind==='Past paper'))
-      ?'Uploaded past-paper question':practice[q.id]?'AI-Generated Practice Question':q.practiceSeed?'Recall practice':'Practice question';
-    return <article className="question" key={q.id}>
-      <header className="question-meta">{index!==undefined&&<span>#{index+1}</span>}{allocation>0&&<span>{allocation} min</span>}</header>
-      <h3>{q.prompt}</h3>
-      <details className="question-answer" onToggle={event=>{if(!sampleMode&&event.currentTarget.open&&!answer)void loadQuestionAnswer(q,answerKey);}}>
-        <summary>View Answer ↓</summary>
-        {sampleMode&&<CoachAnswer text={q.answer}/>}
-        {answer?.pending&&<p role="status">Preparing answer…</p>}
-        {answer?.error&&<><p>Couldn’t verify an answer right now. {q.answerSource?'You can still read the matching passage.':''}</p>
-          <button className="link accent" onClick={()=>void loadQuestionAnswer(q,answerKey)}>Retry</button>
-          {q.answerSource&&<button className="link accent" onClick={()=>open(null,q.answerSource!)}>{sourceLabel(q.answerSource)}</button>}</>}
-        {answer?.text&&<><CoachAnswer text={answer.text}/>
-          <SourceStatus references={answer.references??[]} generated={answer.generated} openSource={reference=>open(null,reference)}/></>}
-      </details>
-      <details className="question-info">
-        <summary aria-label="Question information">ⓘ</summary>
-        <div className="question-detail">
-          <p>{kind}{q.examYears?.length?' · '+q.examYears.join(', '):''}{q.historicalFrequency?' · '+q.historicalFrequency+' recorded appearances'+(q.historicalPaperCount?' across '+q.historicalPaperCount+' papers':''):''}</p>
-          <p>{q.topic}{q.unit?' · Unit '+q.unit:''}{q.marks?' · '+q.marks+' marks':''}</p>
-          <p>{q.reason}</p>
-          <button type="button" className="link accent" onClick={()=>discuss({
-            title:q.topic,text:q.prompt+'\n'+(answer?.text??(sampleMode?q.answer:'')),sources:q.answerSource?[q.answerSource]:[]
-          })}>Ask about this question</button>
-          {shortReview&&<p>Use this allocation to review the method. A full answer takes longer.</p>}
-          {effort&&<p>Remaining estimate: {effort.remaining.understanding} min understanding, {effort.remaining.practice} min practice, {effort.remaining.recall} min recall.</p>}
-          {Boolean(q.learning?.prerequisites.length)&&<p>Syllabus prerequisites: {q.learning?.prerequisites.join(', ')}.</p>}
-          {availableEvidence.length>0&&<details><summary>Question evidence ({availableEvidence.length})</summary>
-            {availableEvidence.map((reference,i)=><button key={i} className="link accent source" onClick={()=>open(null,reference)}>{sourceLabel(reference)}</button>)}
-          </details>}
-        </div>
-      </details>
-      {effort&&q.learning&&<details className="checkpoints">
-        <summary>Practice recall</summary>
-        <p>{q.learning.type} · {preparationLabels[effort.status]} · {effort.completed}/{effort.total} checkpoints</p>
-        <ol>
-          {q.learning.checkpoints.map(checkpoint=><li key={checkpoint.id}>
-            <label><span>{checkpoint.text}<small>{checkpoint.label}</small></span>
-              <select aria-label={checkpoint.text} value={progress[q.id]?.[checkpoint.id]??'incomplete'} onChange={event=>changeCheckpoint(q.id,checkpoint.id,event.target.value as CheckpointState)}>
-                <option value="incomplete">Incomplete</option><option value="completed">Completed</option><option value="revision">Needs revision</option>
-              </select>
-            </label>
-            {checkpoint.source&&<button className="link accent" onClick={()=>open(null,checkpoint.source)}>View notes excerpt</button>}
-          </li>)}
-        </ol>
-      </details>}
-
-    </article>;
   }
   function selectMode(next:PreparationMode){
-    if(next!==mode){
-      if(next==='last-minute')timeAnchor.current=Date.now()-elapsed*60000;
-      else if(planGenerated)setElapsed(Math.max(0,Math.floor((Date.now()-timeAnchor.current)/60000)));
-      setMode(next);setNotice('');setNeedsSubject(false);setDiscussion(null);
-    }
+    setMode(next);setNotice('');setDiscussion(null);setRecallPage(null);
     if(drawerOpen)drawerToggle.current?.focus();
     setDrawerOpen(false);
   }
-  function openBookPage(index:number){
-    setBookIndex(index);selectMode('study');
+  function rememberTopic(){
+    if(activeBookPage&&activeBookContent)setStudied(current=>({...current,[activeBookPage.id]:true}));
   }
-  const hasContext=Boolean(prompt.trim()||files.length||context.subject);
-  const workspaceResult=mode==='study'?Boolean(book&&activeBookPage):Boolean(result&&planGenerated);
+  function openBookPage(index:number,advancing=false){
+    if(advancing)rememberTopic();
+    setBookIndex(index);setRecallPage(null);setDiscussion(null);
+    if(drawerOpen)drawerToggle.current?.focus();
+    setDrawerOpen(false);
+  }
+  function openQuiz(){
+    if(!book||!activeBookContent)return;
+    rememberTopic();
+    const items=book.pages.flatMap(page=>{
+      if(!studied[page.id]&&page!==activeBookPage)return [];
+      const content=bookContent[mode+':'+page.id]??bookContent['study:'+page.id]??bookContent['last-minute:'+page.id];
+      return content?reviewItems(page,content.text,true):[];
+    });
+    setQuiz([...items.filter(item=>item.sources).slice(0,2),...items.filter(item=>!item.sources).slice(0,4)]);
+    quizDialog.current?.showModal();
+  }
+  const workspaceResult=Boolean(book&&activeBookPage);
   const reviewDocuments=documents.filter(document=>!documentComplete(document));
   const reviewCount=reviewDocuments.reduce((sum,document)=>sum+Math.max(0,(document.total??0)-document.pages.filter(isTrusted).length),0);
   const allReviewPages=reviewCount>0&&reviewDocuments.every(document=>document.name.toLowerCase().endsWith('.pdf')&&document.total!==null);
   const reviewLabel=reviewDocuments.some(document=>document.total===null)?'Check unreadable files':
     reviewCount+' '+(allReviewPages?'page':'part')+(reviewCount===1?' needs':'s need')+' review';
-  const activeBookContent=activeBookPage?bookContent[activeBookPage.id]:undefined;
-  const studyPageQuestions=availableQuestions(bookQuestions);
-  function practiceRetry(questions:readonly Question[]){
-    if(practicePending||!questions.some(question=>practiceUnavailable[question.id]&&!practice[question.id]))return null;
-    return <p className="notice">AI practice questions are unavailable. You can use the recall questions below.{' '}
-      <button type="button" className="link accent" onClick={()=>void preparePractice(questions,true)}>Retry AI questions</button>
-    </p>;
-  }
+  const pack:StudyPack={subject:book?.subject??'',context:[],notes:[],timeline:[],questions:[],warnings,
+    generatedNotes:activeBookContent?{text:activeBookContent.text,references:activeBookContent.references.map(reference=>
+      reference.kind==='uploaded'?sourceLabel(reference):reference.title+' · '+reference.url)}:undefined};
+  const mapTopic=(page:BookPage,index:number)=><button type="button" className="link"
+    aria-current={bookIndex===index?'location':undefined} onClick={()=>{mapDialog.current?.close();openBookPage(index);}}>
+    {page.title}
+  </button>;
+  const topicMap=book&&<div className="topic-map">
+    {book.pages[0].title===book.subject?mapTopic(book.pages[0],0):<strong>{book.subject}</strong>}
+    {Array.from(new Set(book.pages.map(page=>page.group))).map(group=>{
+      const entries=book.pages.map((page,index)=>({page,index}))
+        .filter(({page,index})=>page.group===group&&(index!==0||page.title!==book.subject));
+      if(!entries.length)return null;
+      const parent=entries.find(({page})=>page.title===group);
+      return <div key={group} className="topic-branch">
+        {parent?mapTopic(parent.page,parent.index):group&&<span>{group}</span>}
+        <ul>{entries.filter(entry=>entry!==parent).map(({page,index})=><li key={page.id}>{mapTopic(page,index)}</li>)}</ul>
+      </div>;
+    })}
+  </div>;
   const modeButtons=(label:string)=><nav className="preparation-modes" aria-label={label}>
     <button type="button" disabled={busy} aria-pressed={mode==='last-minute'} onClick={()=>selectMode('last-minute')}>Last Minute</button>
     <button type="button" disabled={busy} aria-pressed={mode==='study'} onClick={()=>selectMode('study')}>Study</button>
@@ -847,9 +568,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     <aside ref={drawerPanel} id="study-drawer" className="study-drawer" hidden={!drawerOpen} aria-label="Study navigation">
       <div className="drawer-top"><strong>Study workspace</strong><button type="button" className="icon-btn" aria-label="Close navigation" onClick={()=>{setDrawerOpen(false);drawerToggle.current?.focus();}}><Icon name="close"/></button></div>
       {modeButtons('Preparation modes in navigation')}
-      {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}{mode==='last-minute'&&context.minutes?' · '+context.minutes+' min':''}</p></div>}
+      {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}</p></div>}
       {book&&<nav aria-label="Table of contents"><h2>Contents</h2><ol>
-        {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={mode==='study'&&bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
+        {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
           <span>{index+1}</span>{unit.title}</button></li>)}
       </ol></nav>}
       {files.some(item=>!draftAttachmentIds.includes(item.id))&&<section aria-labelledby="attached-documents-title">
@@ -863,19 +584,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </aside>
     <main id="main" className={'wrap '+(workspaceResult?'workspace':'landing')}>
       {modeButtons('Preparation mode')}
-      <ThemeHero {...theme} headline={mode==='study'?'is baar to phod denge':undefined} compact={workspaceResult}/>
+      <ThemeHero {...theme} headline="is baar to phod denge" guidance="Add past papers, your syllabus, or notes" compact={workspaceResult}/>
       <div className="exam-overview">
-        {(context.subject||book?.subject||mode==='last-minute'&&context.minutes>0)&&<p className="summary">{[context.subject||book?.subject,mode==='last-minute'&&context.minutes?context.minutes+' min available':''].filter(Boolean).join(' · ')}</p>}
         {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
         {!busy&&!reviewDocuments.length&&warnings.some(warning=>warning.startsWith('OCR-only'))&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ OCR evidence needs review</button>}
       </div>
       <section className="conversation" aria-label="Conversation" hidden={!messages.length}>
         <div className="chat-area">
-          <div ref={chatLog} className="messages" role="log" aria-label="Chat messages" tabIndex={0} onScroll={event=>{
-            const log=event.currentTarget;
-            followChat.current=log.scrollHeight-log.scrollTop-log.clientHeight<55;
-            setShowLatest(!followChat.current);
-          }}>
+          <div className="messages" role="log" aria-label="Chat messages">
             <div ref={chatTranscript}>
               {messages.map((message,index)=><div className={'conversation-message '+(message.role==='You'?'message-user':'message-reply')} key={index}>
                 <span className="sr-only">{message.role}</span>
@@ -888,70 +604,58 @@ export function App({api=demoApi}:{api?:ExamApi}) {
               </div>)}
             </div>
           </div>
-          {showLatest&&<button type="button" className="secondary jump-latest" onClick={scrollChatToLatest}>Latest ↓</button>}
         </div>
       </section>
-      {mode==='last-minute' && result && planGenerated && <section className="results" aria-labelledby="results-title">
-        <div className="study-heading">{theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={characterPulse}/>}<h2 id="results-title" ref={resultHeading} tabIndex={-1}>Must Read</h2></div>
-        {aiNote?<article className="study-note" aria-label="Revision notes">
-          <CoachAnswer text={aiNote}/>
-          <SourceStatus references={aiReferences} openSource={reference=>open(null,reference)}/>
-          <button className="link accent" type="button" onClick={()=>discuss({
-            title:revision?.title||context.subject||'Must Read',text:aiNote,
-            sources:aiReferences.filter(reference=>reference.kind==='uploaded')
-          })}>Ask about this summary</button>
-        </article>:sampleMode&&revision&&<article className="study-note" aria-label="Revision notes">
-          <h3>{revision.title}</h3>{revision.passages.map((source,index)=><p key={index}>{source.excerpt}</p>)}
-          <details><summary>Show answer</summary><p>{revision.answer}</p></details>
-          <button type="button" className="link accent" onClick={()=>discuss({title:revision.title,text:revision.answer,sources:revision.passages})}>Ask about this summary</button>
-        </article>}
-        {nextAction&&<p className="notice"><strong>Start here:</strong> {nextAction.title} · {nextAction.minutes} min</p>}
-
-        {!showQuestions&&<button className="primary" onClick={()=>void revealQuestions()}>Generate Questions</button>}
-        {showQuestions&&<section className="results-questions" aria-labelledby="important-questions">
-          {showQuestions&&<h3 id="important-questions" ref={questionsHeading} tabIndex={-1}>Important Questions</h3>}
-          {showQuestions&&practicePending&&<p role="status">Preparing practice questions…</p>}
-
-          {showQuestions&&questionsOutsideBudget&&<p>These questions are available for reference. None fits the remaining preparation budget.</p>}
-          {showQuestions&&practiceRetry(lastMinuteQuestions)}
-          {showQuestions&&questionList.map((question,index)=>renderQuestion(question,index))}
-          {showQuestions&&!practicePending&&!questionList.length&&revision&&<article className="question">
-            <h3>{revision.recall}</h3>
-            <details className="question-answer"><summary>View Answer ↓</summary><p>{revision.answer}</p>
-              <details><summary>Sources (1)</summary><button className="link accent" onClick={()=>open(null,revision.passages[0])}>{sourceLabel(revision.passages[0])}</button></details>
-            </details>
-          </article>}
-          {showQuestions&&!practicePending&&!questionList.length&&!revision&&<p>No reliable questions are available for these topics yet.</p>}
-          {sampleMode&&showQuestions&&limit<fitted.length && <button className="secondary" onClick={()=>setLimit(current=>current+10)}>Show next 10</button>}
-          {showQuestions&&tracked.length>0&&<details className="coverage"><summary>Revisit checkpoint progress ({tracked.length})</summary>{tracked.map(question=>renderQuestion(question))}</details>}
-        </section>}
-      </section>}
-      {mode==='study'&&book&&activeBookPage&&<section className="study-book" aria-labelledby="book-page-title">
-        <header className="book-page-header">
-          <h2 id="book-page-title" tabIndex={-1} ref={studyHeading}>{activeBookPage.title}</h2>
-        </header>
-        {bookErrors[activeBookPage.id]?<div className="book-page-feedback"><p role="alert">{bookErrors[activeBookPage.id]}</p>
-          <button type="button" className="secondary" onClick={()=>setBookErrors(current=>{const next={...current};delete next[activeBookPage.id];return next;})}>Retry page</button>
-        </div>:activeBookContent?<article className="book-content" aria-label="Study page content">
-          <CoachAnswer text={activeBookContent.text}/>
-          {book.demo?<small>Demo</small>:<SourceStatus references={activeBookContent.references} openSource={reference=>open(null,reference)}/>}
-          {bookQuestions.length>0&&<details key={activeBookPage.id} onToggle={event=>{if(event.currentTarget.open)void preparePractice(bookQuestions);}}>
-            <summary>Generate Questions</summary>
-            {practiceRetry(bookQuestions)}
-            {studyPageQuestions.map((question,index)=>renderQuestion(question,index))}
-            {practicePending&&<p role="status">Preparing practice questions…</p>}
-            {!practicePending&&!studyPageQuestions.length&&<p>No reliable practice questions are available for this page.</p>}
-          </details>}
-          <button type="button" className="link accent" onClick={()=>discuss({
-            title:activeBookPage.title,text:activeBookContent.text,sources:activeBookPage.passages
-          })}>Ask about this page</button>
-        </article>:<p role="status" className="book-page-feedback">Preparing this page…</p>}
-        <nav className="book-pagination" aria-label="Study pages">
-          <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>← Previous</button>
-          <span className="book-page-number">Page {bookIndex+1} of {book.pages.length}</span>
-          <button type="button" className="secondary" disabled={bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1)}>Next →</button>
-        </nav>
-      </section>}
+      {book&&activeBookPage&&<div className="learning-layout">
+        <div className="mobile-learning-actions">
+          <button type="button" className="secondary" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>
+          <button type="button" className="secondary" onClick={()=>mapDialog.current?.showModal()}>Topic Map</button>
+        </div>
+        <section className="learning-notes" aria-label="Study notes">
+          {book.pages.map((unit,index)=>{
+            const key=mode+':'+unit.id;
+            const content=bookContent[key];
+            const current=index===bookIndex;
+            if(!current&&(mode==='study'||index>bookIndex||!content))return null;
+            return <article className="learning-section" key={unit.id}>
+              <header className="study-heading">
+                {current&&theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={0}/>}
+                <h2 tabIndex={current?-1:undefined} ref={current?studyHeading:undefined}>{unit.title}</h2>
+              </header>
+              {content?<div className="learning-body">
+                <CoachAnswer text={content.text.replace(/^#{1,6}\s+([^\n]+)\n+/, (heading,title:string)=>
+                  title.trim().toLowerCase()===unit.title.toLowerCase()?'':heading)}/>
+                {content.excerpt&&<p className="notice">Generated notes are unavailable. These excerpts come from your uploaded material.</p>}
+                {book.demo?<small>Demo</small>:<SourceStatus references={content.references} generated={!content.excerpt} openSource={reference=>open(null,reference)}/>}
+                {current&&<div className="lesson-actions">
+                  <button type="button" className="link accent" onClick={()=>discuss({title:unit.title,text:content.text,sources:unit.passages})}>Ask about this topic</button>
+                  {mode==='last-minute'&&<button type="button" className="link accent" onClick={()=>selectMode('study')}>Explore deeper</button>}
+                  {recallPage!==key&&<button type="button" className="link accent" onClick={()=>{rememberTopic();setRecallPage(key);}}>Quick Recall</button>}
+                </div>}
+                {current&&recallPage===key&&<section aria-label="Quick Recall" className="quick-recall">
+                  <p>Thoda yaad bhi kar lein? 🙂</p>
+                  <ReviewForm key={key} items={reviewItems(unit,content.text,false)} openSource={reference=>open(null,reference)}/>
+                  <button type="button" className="link" onClick={()=>setRecallPage(null)}>Back to notes</button>
+                </section>}
+              </div>:bookErrors[key]?<>
+                <p role="alert">{bookErrors[key]}</p>
+                <button type="button" className="secondary" onClick={()=>setBookErrors(({[key]:_,...rest})=>rest)}>Retry topic</button>
+              </>:<p role="status">Preparing notes…</p>}
+            </article>;
+          })}
+          {mode==='study'?<nav className="book-pagination" aria-label="Study pages">
+            <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>← Previous</button>
+            <span className="book-page-number">Page {bookIndex+1} of {book.pages.length}</span>
+            <button type="button" className="secondary" disabled={!activeBookContent||bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1,true)}>Next →</button>
+          </nav>:activeBookContent&&bookIndex+1<book.pages.length&&
+            <button type="button" className="secondary" onClick={()=>openBookPage(bookIndex+1,true)}>Next topic →</button>}
+        </section>
+        <aside className="learning-sidebar" aria-label="Learning tools">
+          <button type="button" className="secondary" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>
+          <h2>Topic Map</h2>
+          {topicMap}
+        </aside>
+      </div>}
       <section ref={composer} aria-label="Message composer" className="setup unified-composer">
         {discussion&&<div className="discussion-context"><span>Discussing {discussion.title}</span>
           <button type="button" className="icon-btn" aria-label="Clear discussion context" onClick={()=>setDiscussion(null)}><Icon name="close"/></button>
@@ -960,52 +664,51 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <label htmlFor="prompt" className="sr-only">Ask a question or paste notes</label>
           <textarea ref={workspaceInput} id="prompt" value={draft} onChange={event=>setDraft(event.target.value)}
             onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();submitMessage();}}}
-            placeholder={needsTime&&mode==='last-minute'?'How many minutes can you study?':'Add past papers, your syllabus, or notes'} rows={2} maxLength={8000}/>
+            placeholder="What are you studying?" rows={2} maxLength={8000}/>
           {draftFiles.length>0 && <ul className="files">{draftFiles.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{documentKinds.map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
             <button className="secondary" type="button" disabled={busy} onClick={()=>input.current?.click()}><Icon name="clip"/> Attach files</button>
             <div className="message-actions">
-              {!discussion&&(!workspaceResult||draft.trim())&&<button className="link accent" type="button" disabled={busy||assistantPending||!(draft.trim()||prompt||files.length)} onClick={()=>submitMessage(true)}>
-                {mode==='study'?'Start Study':'Generate Summary'}
-              </button>}
               <button type="submit" className="primary icon-btn" aria-label="Send message" disabled={busy||assistantPending||!(draft.trim()||newAttachments)}><Icon name="send"/></button>
             </div>
           </div>
         </form>
         {notice && <p role="alert" className="notice">{notice}</p>}
-        {hasContext&&<details className="exam-settings"><summary>Edit details</summary><fieldset className="context" disabled={busy}><legend>Exam details</legend>
-          <label>Exam<input value={context.subject} placeholder="Subject" onChange={e=>update('subject',e.target.value)}/></label>
-          <label>Date<input value={context.date} placeholder="Exam date" onChange={e=>update('date',e.target.value)}/></label>
-          {mode==='last-minute'&&<label>Minutes<input type="number" min="0" max="525600" value={context.minutes||''} placeholder="Study time" onChange={e=>{update('minutes',Math.max(0,Math.min(525600,Math.floor(Number(e.target.value)))));setPlanGenerated(false);}}/></label>}
-          <label>Pass mark<input value={context.pass} placeholder="Optional" onChange={e=>update('pass',e.target.value)}/></label>
-          <label>Paper rules<input value={context.pattern} placeholder="Optional" onChange={e=>update('pattern',e.target.value)}/></label>
-          {context.familiarity!=='unknown'&&<span className="file-count">{familiarityLabels[context.familiarity]}</span>}
-        </fieldset></details>}
-        {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading sample questions…':processingMessage}</p>
+        {busy && <div className="processing-status"><p role="status" className="notice">{sampleMode?'Loading example…':processingMessage}</p>
           {!sampleMode&&<button className="secondary" type="button" onClick={()=>controller.current?.abort()}>Cancel processing</button>}
         </div>}
         {!busy&&!sampleMode&&awaitReview&&<button className="secondary" onClick={()=>void generate(context,'retry')}>Retry unread files</button>}
       </section>
     </main>
+    <dialog ref={mapDialog} aria-labelledby="topic-map-title"><div className="dialog-content">
+      <div className="info-heading"><h2 id="topic-map-title">Topic Map</h2>
+        <form method="dialog"><button className="icon-btn" aria-label="Close topic map"><Icon name="close"/></button></form>
+      </div>
+      {topicMap}
+    </div></dialog>
+    <dialog ref={quizDialog} aria-labelledby="quiz-title" onClose={()=>setQuiz([])}><div className="dialog-content">
+      <div className="info-heading"><h2 id="quiz-title">Quiz</h2>
+        <form method="dialog"><button className="icon-btn" aria-label="Close quiz"><Icon name="close"/></button></form>
+      </div>
+      <ReviewForm items={quiz} openSource={reference=>open(null,reference)}/>
+      <form method="dialog"><button className="link">Back to notes</button></form>
+    </div></dialog>
     <dialog ref={infoDialog} aria-labelledby="study-info-title" onClick={event=>{if(event.target===event.currentTarget)event.currentTarget.close();}}>
       <div className="dialog-content info-content">
         <div className="info-heading"><h2 id="study-info-title">Study information</h2>
           <form method="dialog"><button className="icon-btn" aria-label="Close study information"><Icon name="close"/></button></form>
         </div>
-        {workspaceResult&&mode==='last-minute'&&<div className="study-actions">
-          <DownloadStudyPack pack={pack}/><button className="secondary" disabled={busy} onClick={()=>{infoDialog.current?.close();reset();}}>Start over</button>
+        {workspaceResult&&<div className="study-actions">
+          <DownloadStudyPack pack={pack} notesOnly/><button className="secondary" disabled={busy} onClick={()=>{infoDialog.current?.close();reset();}}>Start over</button>
         </div>}
-        {mode==='last-minute'&&workspaceResult&&pack.timeline.length>0&&<details><summary>Time breakdown</summary><ol className="study-timeline">
-          {pack.timeline.map((item,index)=><li key={index}>{item.title} <strong>{item.minutes} min</strong></li>)}
-        </ol></details>}
         {workspaceResult&&pack.warnings.length>0&&<details><summary>Sources and coverage</summary>
           <ul>{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>
         </details>}
-        {(aiNote||activeBookContent)&&<section>
+        {activeBookContent&&<section>
           <h3>Source verification</h3>
           <p>Sources links to the uploaded passages or web references used in an answer. Unverified explanations are labeled beside the study content.</p>
-          {(mode==='study'?activeBookContent?.webLimited:summaryWebLimited)&&<p>Web sources were unavailable for this result.</p>}
+          {activeBookContent.webLimited&&<p>Web sources were unavailable for this result.</p>}
         </section>}
         {!sampleMode&&activeApi.prepare&&documents.length>0&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
         <button className="link accent" type="button" disabled={busy||assistantPending} onClick={()=>{infoDialog.current?.close();toggleExample();}}>{exampleMode?'Exit demo':'Try an example'}</button>
@@ -1049,7 +752,7 @@ const root=typeof document==='undefined'?null:document.getElementById('root');
 if(root) {
   const appRoot=createRoot(root);
   void import('./live').then(({liveApi})=>appRoot.render(<App api={liveApi}/>)).catch(()=>{
-    appRoot.render(<p role="alert">The study planner could not start. Refresh to retry.</p>);
+    appRoot.render(<p role="alert">The study workspace could not start. Refresh to retry.</p>);
   });
 }
 

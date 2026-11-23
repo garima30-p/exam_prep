@@ -7,149 +7,8 @@ import { prepareScope } from './preparation-scope';
 import { demoApi, fixture } from './api';
 import type { ExamApi, RankedQuestion } from './api';
 import { makeLearningPlan } from '../server/learning.mjs';
-
-const setDraft=(host:HTMLElement,value:string)=>{
-  const field=host.querySelector<HTMLTextAreaElement>('#prompt')!;
-  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(field,value);
-  field.dispatchEvent(new Event('input',{bubbles:true}));
-};
-const submitDraft=(host:HTMLElement)=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
-const writeMessage=async(host:HTMLElement,value:string)=>{
-  await act(async()=>setDraft(host,value));
-  await act(async()=>submitDraft(host));
-};
-
-it.each(['I have 30 minutes to study. ',''])('renders a real notes-only summary with budget prefix %j',async(prefix)=>{
-  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
-  const host=document.createElement('div');
-  document.body.append(host);
-  const root=createRoot(host);
-  const api:ExamApi={...demoApi,analyze:async()=>({questions:[],warnings:[]})};
-  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'The Workers AI binding is missing.'},{status:503})));
-  try{
-    await act(async()=>root.render(<App api={api}/>));
-    await act(async()=>{
-      const prompt=host.querySelector('textarea')!;
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(prompt,
-        'My Operating Systems exam is tomorrow. '+prefix+'Summarize my notes: FIFO evicts the page that arrived earliest. LRU evicts the page whose most recent access was furthest in the past. A hit updates recency in LRU.');
-      prompt.dispatchEvent(new Event('input',{bubbles:true}));
-    });
-    await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    if(!prefix){
-      expect(host.querySelector('[role=log]')?.textContent).toContain('How many minutes can you study?');
-      await writeMessage(host,'5 minutes');
-    }
-    expect(host.querySelector('[aria-label="Revision notes"]')).toBeNull();
-    expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('AI generation is temporarily unavailable');
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('AI generation failed. Please retry.');
-    expect(host.querySelector('#prompt')).not.toBeNull();
-  }finally{
-    await act(async()=>root.unmount());
-    host.remove();
-    vi.unstubAllGlobals();
-    history.replaceState(null,'',location.pathname);
-  }
-});
-
-it('asks for study time, then shows a plan and answers a contextual question', async ()=>{
-  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
-  const host=document.createElement('div');
-  document.body.append(host);
-  const root=createRoot(host);
-  const setValue=(field:HTMLInputElement|HTMLTextAreaElement,value:string)=>{
-    const elementType=field instanceof HTMLTextAreaElement?HTMLTextAreaElement:HTMLInputElement;
-    Object.getOwnPropertyDescriptor(elementType.prototype,'value')?.set?.call(field,value);
-    field.dispatchEvent(new Event('input',{bubbles:true}));
-  };
-  try {
-    await import('./study-markdown');
-    await act(async()=>root.render(<App/>));
-    await act(async()=>setValue(host.querySelector('textarea')!,'My DBMS exam is tomorrow. Make a study plan.'));
-    const picker=host.querySelector<HTMLInputElement>('input[type=file]')!;
-    Object.defineProperty(picker,'files',{value:[new File(['fixture'],'DBMS_PYQ.pdf',{type:'application/pdf'})]});
-    await act(async()=>picker.dispatchEvent(new Event('change',{bubbles:true})));
-    expect(host.querySelector<HTMLSelectElement>('[aria-label="Type for DBMS_PYQ.pdf"]')?.value).toBe('Past paper');
-    await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    expect(host.querySelector('[role=log]')?.textContent).toContain('How many minutes can you study?');
-    await writeMessage(host,'5 hours');
-    await act(async()=>{await new Promise(resolve=>setTimeout(resolve,460));});
-    expect(host.querySelectorAll('.question')).toHaveLength(0);
-    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
-    expect(host.querySelectorAll('.question')).toHaveLength(10);
-    expect(document.activeElement?.id).toBe('important-questions');
-    expect(host.querySelectorAll('#prompt')).toHaveLength(1);
-    expect(host.textContent).not.toContain('Study Coach');
-    await writeMessage(host,'Why #1?');
-    expect(host.querySelector('[role=log]')?.textContent).toContain('page 1, Q1');
-    await writeMessage(host,'Only 30 minutes left');
-    expect(host.querySelector('[role=log]')?.textContent?.indexOf('Only 30 minutes left')).toBeGreaterThan(host.querySelector('[role=log]')?.textContent?.indexOf('Why #1?')??0);
-    expect(host.querySelector('.summary')?.textContent).toContain('30 min available');
-    expect(host.querySelectorAll('.question').length).toBeGreaterThan(0);
-    const allocations=[...host.querySelectorAll('.study-timeline strong')].map(item=>parseInt(item.textContent??'0',10));
-    expect(allocations.reduce((sum,item)=>sum+item,0)).toBeLessThanOrEqual(30);
-    await act(async()=>setDraft(host,'My DBMS exam is tomorrow. I have two hours.'));
-    expect(host.querySelector('#results-title')).not.toBeNull();
-    expect(host.querySelector('.composer [aria-label="Send message"]')).not.toBeNull();
-  } finally {
-    await act(async()=>root.unmount());
-    host.remove();
-    history.replaceState(null,'',location.pathname);
-  }
-});
-
-it('reoptimizes real plan candidates on chat without reanalyzing their sources', async ()=>{
-  const host=document.createElement('div');
-  document.body.append(host);
-  const root=createRoot(host);
-  let calls=0;
-  const questions:RankedQuestion[]=fixture.slice(0,3).map((question,index)=>({...question,
-    priorityScore:[50,40,40][index],minutes:[40,30,30][index],topicIds:[question.topic],marks:0,
-    historicalFrequency:0,historicalPaperCount:0,examYears:[],scoreComponents:{},
-    learning:{type:'explanation',baseMinutes:index===0?[20,10,5]:[15,6,5],difficulty:'standard',material:'question-only',prerequisites:[],
-      checkpoints:[{id:'u',text:'Explain the idea',phase:'understanding',label:'Type guide'},
-        {id:'p',text:'Try an example',phase:'practice',label:'Type guide'},
-        {id:'r',text:'Recall it',phase:'recall',label:'Type guide'}]}}));
-  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({available:true,explanation:'Normalization reduces duplicated data.',sources:[]})));
-  const topics=questions.map(question=>({id:question.topic,title:question.topic,weight:1}));
-  const api:ExamApi={...demoApi,async analyze(context) {
-    calls++;
-    return {questions,warnings:[],optimization:{candidates:questions,topics,plan:makeLearningPlan(questions,topics,context.minutes,context.pattern,context.familiarity)}};
-  }};
-  const input=(selector:string,value:string)=>{
-    const field=host.querySelector<HTMLInputElement|HTMLTextAreaElement>(selector)!;
-    const type=field instanceof HTMLTextAreaElement?HTMLTextAreaElement:HTMLInputElement;
-    Object.getOwnPropertyDescriptor(type.prototype,'value')!.set!.call(field,value);
-    field.dispatchEvent(new Event('input',{bubbles:true}));
-  };
-  const submit=(selector:string)=>host.querySelector(selector)!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
-  const reveal=()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click();
-  try {
-    await act(async()=>root.render(<App api={api}/>));
-    await act(async()=>input('textarea','My DBMS exam is tomorrow. I have 67 minutes. Summarize my notes: Normalization reduces duplicated data.'));
-    await act(async()=>submit('.composer'));
-    await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Generate Questions')!.click());
-    expect([...host.querySelectorAll('.question h3')].map(item=>item.textContent)).toEqual(questions.slice(1).map(q=>q.prompt));
-    await writeMessage(host,'I only have 45 minutes now.');
-    expect(host.querySelector('#results-title')).not.toBeNull();
-    await act(async()=>reveal());
-    expect(host.querySelector('.question h3')?.textContent).toBe(questions[0].prompt);
-    expect(host.querySelector('.question .source')?.textContent).toContain('p. 1 · Q1');
-    const checkpoint=host.querySelector<HTMLSelectElement>('.question select')!;
-    await act(async()=>{
-      checkpoint.value='completed';
-      checkpoint.dispatchEvent(new Event('change',{bubbles:true}));
-    });
-    await writeMessage(host,'I have only 44 minutes left.');
-    expect(host.querySelector('#results-title')).not.toBeNull();
-    await act(async()=>reveal());
-    expect(host.querySelector<HTMLSelectElement>('.question select')?.value).toBe('completed');
-    expect(host.querySelector('.question .checkpoints p')?.textContent).toContain('1/3 checkpoints');
-    expect(calls).toBe(1);
-  } finally {
-    await act(async()=>root.unmount());
-    host.remove();
-  }
-});
+import { bookOutline } from './study-book';
+import { reviewItems } from './learning-review';
 
 it('chooses syllabus-aligned review over a cheap unrelated question in ten minutes',()=>{
  const [rare,aligned]=fixture;
@@ -173,102 +32,55 @@ it('chooses syllabus-aligned review over a cheap unrelated question in ten minut
  expect(selected.allocations[aligned.id]+1).toBeLessThanOrEqual(10);
 });
 
-it('generates study pages on demand and keeps page position and analysis across the two modes',async()=>{
+it('teaches a recognized exam subject immediately and caches each learning depth',async()=>{
   Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
-  const host=document.createElement('div');document.body.append(host);
+  const host=document.createElement('div');
+  document.body.append(host);
   const root=createRoot(host);
-  const requests:{studyUnit?:boolean;topic?:string;minutes?:number;task?:string}[]=[];
-  const api:ExamApi={...demoApi,analyze:vi.fn(demoApi.analyze)};
-  vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{const request=JSON.parse(init.body);requests.push(request);
-    return Response.json({explanation:'Example explanation for '+request.topic,sources:[]});}));
-  const button=(label:string,container:Element=host)=>Array.from(container.querySelectorAll('button')).find(item=>item.textContent===label)!;
-  const click=(label:string,container?:Element)=>act(async()=>button(label,container).click());
-  const submit=()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
-  try{
-    await act(async()=>root.render(<App api={api}/>));
-    const modes=host.querySelector('[aria-label="Preparation mode"]')!;
-    await click('Study',modes);
-    await act(async()=>{const input=host.querySelector('textarea')!;
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Help me study DBMS');
-      input.dispatchEvent(new Event('input',{bubbles:true}));});
-    await act(async()=>{submit();await new Promise(resolve=>setTimeout(resolve,470));});
-    expect(host.querySelector('[role=log]')?.textContent).not.toContain('How many minutes can you study?');
-    expect(host.querySelector('.book-page-number')?.textContent).toMatch(/^Page 1 of /);
-    expect(requests.filter(req=>req.studyUnit)).toHaveLength(1);
-    await click('Next →');
-    const secondPage=host.querySelector('#book-page-title')?.textContent;
-    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
-    await click('← Previous');
-    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
-    await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Study navigation"]')!.click());
-    const toc=host.querySelector('[aria-label="Table of contents"]')!;
-    await act(async()=>toc.querySelectorAll('button')[1].click());
-    expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
-    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
-    await click('Last Minute',modes);
-    await act(async()=>submit());
-    await writeMessage(host,'5 minutes');
-    expect(host.querySelector('.summary')?.textContent).toContain('5 min available');
-    await click('Study',modes);
-    expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
-    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
-    await act(async()=>{const input=host.querySelector('textarea')!;
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Help me study DBMS I have 15 minutes.');
-      input.dispatchEvent(new Event('input',{bubbles:true}));});
-    expect(host.querySelector('#book-page-title')?.textContent).toBe(secondPage);
-    await click('Last Minute',modes);
-    await act(async()=>submit());
-    expect(host.querySelector('.summary')?.textContent).toContain('15 min available');
-    expect(requests.filter(req=>req.studyUnit)).toHaveLength(2);
-    expect(api.analyze).toHaveBeenCalledTimes(1);
-  }finally{
-    await act(async()=>root.unmount());
-    host.remove();vi.unstubAllGlobals();history.replaceState(null,'',location.pathname);
-  }
-});
-
-it('offers questions on a prompt-only Study page and lets users retry failed practice generation',async()=>{
-  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
-  const host=document.createElement('div');document.body.append(host);
-  const root=createRoot(host);
-  const api:ExamApi={...demoApi,analyze:async()=>({questions:[],warnings:[]})};
-  let practiceCalls=0;
+  const analyze=vi.fn<ExamApi['analyze']>(async()=>({questions:[],warnings:[]}));
+  const requests:{learningMode?:string;minutes?:number;topic?:string}[]=[];
   vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{
-    const request=JSON.parse(init.body);
-    if(request.task==='practice'){
-      expect(request.priorities[0].id).toBe(1);
-      practiceCalls++;
-      return practiceCalls===1?Response.json({code:'usage_limit'},{status:429}):
-        Response.json({questions:[{id:request.priorities[0].id,prompt:'How can a circular wait lead to deadlock?'}]});
-    }
-    return Response.json({explanation:'Deadlock occurs when processes wait indefinitely for one another.',sources:[]});
+    requests.push(JSON.parse(init.body));
+    return Response.json({explanation:'A process is a program that is being executed. The kernel manages resources.',sources:[]});
   }));
-  const button=(label:string)=>[...host.querySelectorAll('button')].find(item=>item.textContent===label)!;
+  const button=(name:string)=>Array.from(host.querySelectorAll('button')).find(button=>button.textContent===name)!;
   try{
-    await act(async()=>root.render(<App api={api}/>));
-    await act(async()=>button('Study').click());
+    await act(async()=>root.render(<App api={{...demoApi,analyze}}/>));
     await act(async()=>{
-      const input=host.querySelector('textarea')!;
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'Teach me about deadlock.');
+      const input=host.querySelector<HTMLTextAreaElement>('#prompt')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'OS ka paper hai, kuch nahi padha.');
       input.dispatchEvent(new Event('input',{bubbles:true}));
     });
     await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    const details=[...host.querySelectorAll('details')].find(item=>item.querySelector('summary')?.textContent==='Generate Questions')!;
-    await act(async()=>{details.querySelector('summary')!.click();await new Promise(resolve=>setTimeout(resolve,25));});
-    expect(host.querySelector('.question h3')?.textContent).toBe('What are the key points to remember about deadlock?');
-    expect(host.querySelector('.question .source')).toBeNull();
-    await act(async()=>button('Retry AI questions').click());
-    expect(host.querySelector('.question h3')?.textContent).toBe('How can a circular wait lead to deadlock?');
-    expect(host.querySelector('.question')?.textContent).toContain('AI-Generated Practice Question');
-    expect(practiceCalls).toBe(2);
+    expect(host.querySelector('.learning-notes h2')?.textContent).toBe('Operating Systems');
+    expect(host.textContent).not.toContain('How many minutes');
+    expect(host.textContent).not.toContain('Generate Questions');
+    expect(analyze.mock.calls[0][0].minutes).toBe(0);
+    expect(analyze.mock.calls[0][3]?.learning).toBe(true);
+    expect(requests).toMatchObject([{learningMode:'last-minute',topic:'Operating Systems'}]);
+    expect(requests[0]).not.toHaveProperty('minutes');
+    await act(async()=>button('Next topic →').click());
+    expect([...host.querySelectorAll('.learning-notes h2')].map(h=>h.textContent)).toEqual(['Operating Systems','Process Management']);
+    await act(async()=>button('Study').click());
+    expect(host.querySelector('.book-page-number')?.textContent).toContain('Page 2');
+    expect(requests.at(-1)).toMatchObject({learningMode:'study',topic:'Process Management'});
     await act(async()=>button('Last Minute').click());
-    await act(async()=>host.querySelector('.composer')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-    await writeMessage(host,'5 minutes');
-    await act(async()=>button('Generate Questions').click());
-    expect(host.querySelector('.question h3')?.textContent).toBe('How can a circular wait lead to deadlock?');
-    expect(practiceCalls).toBe(3);
+    expect(requests.length).toBe(3);
+    expect(analyze).toHaveBeenCalledTimes(1);
   }finally{
     await act(async()=>root.unmount());
-    host.remove();vi.unstubAllGlobals();history.replaceState(null,'',location.pathname);
+    host.remove();vi.unstubAllGlobals();
   }
+});
+
+it('uses only the displayed notes for recall and retains original historical question evidence in the quiz',()=>{
+  const question={...fixture[11],topic:'Deadlock',historical:true};
+  const page=bookOutline({questions:[question],warnings:[]},'Operating Systems','',[]).find(unit=>unit.title==='Deadlock')!;
+  const notes='Deadlock occurs when processes wait indefinitely for resources held by one another.';
+  const recall=reviewItems(page,notes,false);
+  expect(recall).toHaveLength(1);
+  expect(recall[0]).toMatchObject({answer:'Deadlock',explanation:notes});
+  expect(recall[0]).not.toHaveProperty('sources');
+  const quiz=reviewItems(page,notes,true);
+  expect(quiz[0]).toMatchObject({prompt:question.prompt,sources:[question.source]});
 });

@@ -1,10 +1,11 @@
 import type { Analysis, Question, RankedQuestion, Source } from './api';
 import { duration } from './api';
-import { makePlan } from '../server/optimizer.mjs';
+import { studySubject } from '../server/coach-topics.mjs';
 
 export type BookPage = {
   id: string;
   title: string;
+  group: string;
   questions: readonly Question[];
   passages: Source[];
 };
@@ -13,50 +14,55 @@ export function studyTopic(prompt: string) {
   return prompt.trim().match(/^(?:could you |can you |please )?(?:help me (?:study|revise)|teach me(?: about)?|explain|study|revise|learn(?: about)?)\s+([^.!?\n]{3,90})[.?!]?$/i)?.[1]?.trim() ?? '';
 }
 
-export function bookOutline(analysis: Analysis, fallbackTopics: readonly string[], passages: readonly Source[]): BookPage[] {
+const normalize=(text:string)=>text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+const osGroups=[
+  {title:'Process Management',topics:['CPU Scheduling','Process Synchronization','Deadlock'],match:/process|schedul|synchron|deadlock|semaphore|mutex|critical section|banker/},
+  {title:'Memory Management',topics:['Paging','Segmentation','Page Replacement'],match:/memory|paging|segmentation|replacement|fifo|lru|thrashing/},
+  {title:'Storage and I/O',topics:[],match:/file system|disk|storage|device|input output/}
+];
+
+export function learningSubject(text:string,fallback='') {
+  const subject=studySubject(text);
+  if(subject==='operating systems')return 'Operating Systems';
+  return fallback||subject.replace(/\b\w/g,letter=>letter.toUpperCase());
+}
+
+export function bookOutline(analysis:Analysis,subject:string,focus:string,passages:readonly Source[]) {
+  const os=studySubject(subject)==='operating systems';
+  const evidence=new Map<string,{title:string;questions:Question[];score:number}>();
   const candidates=analysis.optimization?.candidates??analysis.questions;
-  const topics=analysis.optimization?.topics??[];
-  const syllabus=new Map(topics.filter(topic=>topic.id.startsWith('syllabus:')).map(topic=>[topic.id,topic]));
-  const groups=new Map<string,{page:BookPage; ids:string[]; score:number}>();
-  const normalize=(title:string)=>title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-
   for(const question of candidates){
-    const ranked='topicIds' in question?question as RankedQuestion:null;
-    const linked=ranked?.topicIds.filter(id=>syllabus.has(id))??[];
-    const direct=normalize(question.topic);
-    const existing=[...groups.values()].find(group=>normalize(group.page.title)===direct||
-      linked.some(id=>group.ids.includes(id)));
-    const score=ranked?.priorityScore??1;
-    if(existing){
-      if(existing.page.questions.length<3)existing.page.questions=[...existing.page.questions,question];
-      existing.ids=[...new Set([...existing.ids,...linked])];
-      existing.score=Math.max(existing.score,score);
-      continue;
-    }
-    if(!direct)continue;
-    groups.set(direct,{page:{id:direct,title:question.topic,questions:[question],passages:[]},ids:linked,score});
+    const id=normalize(question.topic);
+    if(!id)continue;
+    const record=evidence.get(id)??{title:question.topic,questions:[],score:0};
+    record.questions.push(question);
+    record.score=Math.max(record.score,'priorityScore' in question?(question as RankedQuestion).priorityScore:1);
+    evidence.set(id,record);
   }
-
-  if(!groups.size){
-    for(const title of fallbackTopics){
-      const id=normalize(title);
-      if(id&&!groups.has(id))groups.set(id,{page:{id,title,questions:[],passages:[]},ids:[],score:1});
+  const ranked=[...evidence.values()].sort((a,b)=>b.score-a.score);
+  const titles=[focus||subject];
+  if(os&&!focus){
+    for(const group of osGroups){
+      const related=ranked.filter(entry=>group.match.test(normalize(entry.title)));
+      if(!related.length&&!group.topics.length)continue;
+      titles.push(group.title,...(related.length?related.map(entry=>entry.title):group.topics));
     }
   }
-
-  const ranked=[...groups.values()].sort((a,b)=>b.score-a.score).slice(0,16);
-  // Use NEO's coverage selection for the opening units. One unit costs one slot,
-  // so this orders the outline without imposing a time limit on the student.
-  const opening=makePlan(ranked.map((group,index)=>({id:index+1,minutes:1,priorityScore:group.score,topicIds:group.ids})),
-    topics,Math.min(4,ranked.length+1));
-  const first=new Set(opening.selectedQuestionIds);
-  const ordered=[...opening.selectedQuestionIds.map(id=>ranked[id-1]),...ranked.filter((_,index)=>!first.has(index+1))];
-  return ordered.map(({page})=>{
-    const words=new Set(normalize(page.title).split(' ').filter(word=>word.length>=3));
-    const relevant=ordered.length===1?passages:passages.filter(source=>normalize(source.excerpt).split(' ').some(word=>words.has(word)));
-    const sources=[...page.questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),...relevant];
-    return {...page,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
-  });
+  titles.push(...ranked.map(entry=>entry.title));
+  const used=new Set<string>();
+  return titles.flatMap(title=>{
+    const id=normalize(title);
+    if(!id||used.has(id))return [];
+    used.add(id);
+    const group=osGroups.find(entry=>os&&entry.match.test(id));
+    const questions=evidence.get(id)?.questions??[];
+    const words=id.split(' ').filter(word=>word.length>3);
+    const relevant=passages.filter(source=>words.some(word=>normalize(source.excerpt).includes(word)));
+    const sources=[...questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),
+      ...(id===normalize(focus||subject)&&!relevant.length?passages:relevant)];
+    const page:BookPage={id,title,group:group?.title??'',questions,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
+    return [page];
+  }).slice(0,16);
 }
 
 export function studySessionPrompt(prompt:string) {

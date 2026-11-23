@@ -491,3 +491,18 @@ it('uses a book page as context without letting it ground an unrelated follow-up
   expect(await response.json()).toMatchObject({explanation:'A haiku is a short form of poetry.',sources:[]});
   expect(run.mock.calls[0][1]).not.toHaveProperty('response_format');
 });
+
+it('uses distinct learning depths without sending an invented study duration to Gemma',async()=>{
+  const {env,run}=setup();
+  run.mockResolvedValue({response:'A process is a running program.'});
+  for(const [learningMode,minutes] of [['last-minute',undefined],['study',5]]){
+    const response=await handle(post('coach',{mode:'auto',task:'notes',studyUnit:true,learningMode,minutes,
+      request:'Teach process management.',topic:'Process Management',topics:['Process Management'],subject:'Operating Systems'}),env);
+    expect(response.status).toBe(200);
+  }
+  const [compact,deep]=run.mock.calls.map(([,request])=>request);
+  expect(compact.max_completion_tokens).toBeLessThan(deep.max_completion_tokens);
+  expect(compact.messages[0].content).toContain('assume a beginner');
+  expect(compact.messages[0].content).not.toContain('"minutes":');
+  expect(deep.messages[0].content).toContain('"minutes":5');
+});

@@ -63,6 +63,7 @@ button:disabled{opacity:.55;cursor:default}
 .landing,.workspace{position:relative;display:flex;flex:1;flex-direction:column}
 .hero{position:relative;text-align:center;padding-bottom:.75rem}
 .hero:empty{display:none}
+.hero p{color:var(--hint-text);font-size:.9rem;margin:.35rem 0 0}
 .hero h1{color:var(--hint-text);font-size:clamp(1rem,3.5vw,1.25rem);font-weight:400;line-height:1.4;margin:0}
 [data-theme^="anime-"]{--hint-text:#c7c7c7}
 .footer{justify-content:center}
@@ -339,7 +340,7 @@ dialog::backdrop{background:var(--backdrop)}
 .book-pagination span{text-align:center}
 .conversation{width:min(100%,48rem);margin:1rem auto}
 .chat-area{position:relative}
-.conversation .messages{max-height:min(32rem,55dvh);padding:0 .2rem .4rem;overflow-anchor:none}
+.conversation .messages{overflow:visible;padding:0 .2rem .4rem}
 .conversation-message{min-width:0;margin:.5rem 0;overflow-wrap:anywhere}
 .message-user{width:fit-content;max-width:90%;margin-inline-start:auto;padding:.55rem .8rem;background:var(--subtle);border-radius:.85rem}
 .messages .message-user p,.messages .message-reply p,.question .coach-answer p{color:var(--ink)}
@@ -372,7 +373,32 @@ dialog::backdrop{background:var(--backdrop)}
   .header-tools .icon-btn,.book-brand>.icon-btn{width:44px;padding:.4rem}
   .preparation-modes button{min-height:44px}
   .message-actions .link{padding:.4rem .15rem;font-size:.8rem}
-  .conversation .messages{max-height:43dvh}
   .unified-composer .composer-actions>.secondary{padding-inline:.5rem}
   .book-pagination{gap:.3rem}
+}
+
+.learning-layout{width:min(100%,64rem);margin:1rem auto 2rem;display:grid;grid-template-columns:minmax(0,1fr) minmax(12rem,16rem);gap:clamp(1rem,4vw,3rem);align-items:start}
+.learning-notes{min-width:0;max-width:46rem}
+.learning-section{padding:.4rem 0 1.2rem;margin-bottom:1rem;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.learning-section h2{font-size:clamp(1.45rem,4.5vw,2.2rem);scroll-margin-top:1rem}
+.learning-body .coach-answer{margin:.6rem 0;line-height:1.7}
+.learning-sidebar{border-inline-start:1px solid var(--line);padding-inline-start:1rem}
+.learning-sidebar h2{font-size:1rem;margin:1rem 0 .5rem}
+.topic-map{overflow-wrap:anywhere}
+.topic-branch{margin:.5rem 0;padding-left:.65rem;border-inline-start:1px solid var(--line)}
+.topic-branch ul{padding-inline-start:.75rem}
+.topic-branch span{font-size:.85rem;color:var(--muted)}
+.topic-branch .link{text-align:start;min-height:42px}
+.topic-branch [aria-current]{text-decoration:underline;text-underline-offset:.22rem}
+.mobile-learning-actions{display:none}
+.lesson-actions{display:flex;gap:.6rem 1.1rem;flex-wrap:wrap}
+.lesson-actions button{min-height:42px}
+.quick-recall,.quiz-feedback{margin:.65rem 0;padding:.65rem;background:var(--subtle);border-radius:var(--radius)}
+.learning-quiz{display:grid;gap:.8rem;margin:.65rem 0;padding:0;list-style:none}
+.learning-quiz small{display:block;color:var(--muted);margin-bottom:.25rem}
+.learning-quiz textarea{min-height:3.25rem;background:var(--surface);border:1px solid var(--line);border-radius:.5rem;padding:.4rem}
+@media(max-width:760px){
+  .learning-layout{grid-template-columns:minmax(0,1fr);gap:.6rem}
+  .learning-sidebar{display:none}
+  .mobile-learning-actions{display:flex;gap:.5rem;flex-wrap:wrap}
 }

@@ -13,7 +13,7 @@ export const liveApi:ExamApi = {
   prepare:extractDocuments,
   async analyze(context, files, prompt, options):Promise<Analysis> {
     const warnings:string[]=[];
-    if(files.length&&!options?.documents)throw new Error('Read and check the attachments before generating a plan.');
+    if(files.length&&!options?.documents)throw new Error('Read and check the attachments before opening the notes.');
     const materials=files.filter(item=>item.kind!=='Administrative'&&item.kind!=='Unreadable').map(item=>{
       const record=options?.documents.find(document=>document.id===item.id);
       const complete=record!==undefined&&documentComplete(record);
@@ -30,7 +30,7 @@ export const liveApi:ExamApi = {
     if (prompt.trim()) materials.push({name:'Pasted text',kind:'Unclassified',documentIndex:0,complete:true,totalPages:1,
       pages:[{number:1,text:prompt,method:'manual',status:'verified'}]});
     const response=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
-      signal:options?.signal,body:JSON.stringify({materials,minutes:context.minutes,pattern:context.pattern,familiarity:context.familiarity})});
+      signal:options?.signal,body:JSON.stringify(options?.learning?{materials,learning:true}:{materials,minutes:context.minutes,pattern:context.pattern,familiarity:context.familiarity})});
     const data=await response.json() as {questions?:RankedQuestion[];topics?:SyllabusTopic[];plan?:LearningPlan;generatedCoach?:boolean;error?:string};
     if(!response.ok||!data.questions||!data.topics||!data.plan) throw new Error(data.error||'Analysis service unavailable.');
     options?.onPlanning?.();

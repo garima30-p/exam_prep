@@ -88,3 +88,12 @@ it('keeps the raw OCR citation but gives marks credit only to verified text',asy
   expect(questions.find(q=>q.source.page===1)).toMatchObject({marks:0,scoreComponents:{marks:null},source:{number:'Line 1',excerpt:expect.stringContaining('[3]')}});
   expect(questions.find(q=>q.source.page===2)).toMatchObject({marks:5,source:{number:'3'}});
 });
+
+it('ranks learning material without a time component and keeps past paper evidence',async()=>{
+  const response=await post({learning:true,materials:[
+    {name:'OS-PYQ.pdf',kind:'Past paper',pages:[{number:1,text:'Q1. Explain deadlock and list its four necessary conditions.'}]}
+  ]});
+  const {questions,plan}=await response.json();
+  expect(questions[0]).toMatchObject({historical:true,scoreComponents:{preparationTime:null},source:{file:'OS-PYQ.pdf',page:1}});
+  expect(plan.selectedQuestionIds).toEqual([]);
+});

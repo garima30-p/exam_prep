@@ -115,7 +115,7 @@ function candidates(materials) {
   return {records:[...questions.values()],prerequisites};
 }
 
-export function buildPlan(materials) {
+export function buildPlan(materials,{learning=false}={}) {
   materials=materials.map(material=>{
     if(material.kind!=='Syllabus')return material;
     let inOutcomes=false;
@@ -194,7 +194,7 @@ export function buildPlan(materials) {
       marks:record.marks?record.marks/maxMarks:null,
       syllabus:knownTopics.length?Number(matching.length>0):null,
       breadth:matching.length?Math.min(new Set(matching.map(topic=>topic.id)).size,4)/4:null,
-      preparationTime:(30-minutes)/15,
+      preparationTime:learning?null:(30-minutes)/15,
       recency:record.years.size&&latest>oldest?(Math.max(...record.years)-oldest)/(latest-oldest):null
     };
     return {record,minutes,priorityScore:scorePriority(scoreComponents),scoreComponents,topicIds,units};
@@ -292,7 +292,7 @@ export async function handle(request,env) {
     }
     const materials=validate(input);
     if (!materials) return json({error:'Invalid material or page structure.'},400);
-    const {questions,topics}=buildPlan(materials);
+    const {questions,topics}=buildPlan(materials,{learning:input.learning===true});
     const plan=makeLearningPlan(questions,topics,
       typeof input.minutes==='number'&&Number.isFinite(input.minutes)?input.minutes:0,
       typeof input.pattern==='string'?input.pattern.slice(0,600):'',input.familiarity);

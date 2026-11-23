@@ -67,7 +67,7 @@ function combine(members,topics) {
   };
   const minutes=initialMinutes(marks);
   const scoreComponents={historical:strongest('historical'),recurrence,marks:strongest('marks'),syllabus:strongest('syllabus'),
-    breadth:known.length?Math.min(known.length,4)/4:null,recency:strongest('recency'),preparationTime:(30-minutes)/15};
+    breadth:known.length?Math.min(known.length,4)/4:null,recency:strongest('recency'),preparationTime:members.every(question=>question.scoreComponents?.preparationTime===null)?null:(30-minutes)/15};
   const withNotes=members.find(question=>question.answerSource)??first;
   const merged={...representative,id:first.id,sources,paperIds,topicIds,marks,minutes,marksByGroup,scoreComponents,priorityScore:scorePriority(scoreComponents),
     historicalFrequency:paperIds.length,sections:unique(members.flatMap(q=>q.sections??[])),units:unique(members.flatMap(q=>q.units??[])),
