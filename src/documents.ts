@@ -7,6 +7,7 @@ import { isTrusted } from './document-state';
 import type { ExtractedPage, PrepareOptions } from './document-state';
 import type { Material } from './api';
 import { abortable } from './abortable';
+import { browserTiming, now } from '../server/performance.mjs';
 import { documentFormat } from './document-formats';
 
 GlobalWorkerOptions.workerSrc=workerUrl;
@@ -33,7 +34,8 @@ async function nativeText(page:PDFPageProxy,signal:AbortSignal) {
 }
 
 export async function extractDocuments(files:readonly Material[],options:PrepareOptions) {
-  const {signal,retry,onUpdate}=options;
+  const {signal,retry,onUpdate,cache}=options;
+  const extractionStarted=now();
   const records=files.map(file=>{
     const existing=options.records.find(record=>record.id===file.id);
     return existing?{...existing,pages:existing.pages.slice()}:{id:file.id,name:file.file.name,total:null,pages:[]};
@@ -48,6 +50,32 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
       const label=(page?:number)=>item.file.name+' ('+(fileIndex+1)+'/'+files.length+')'+(page?' · page '+page+' of '+record.total:'');
       publish('Opening '+label());
       const format=documentFormat(item.file.name);
+      let data:ArrayBuffer|undefined;
+      let cacheKey:string|undefined;
+      if(cache&&globalThis.crypto?.subtle){
+        try{
+          data=await abortable(item.file.arrayBuffer(),signal);
+          const digest=await abortable(crypto.subtle.digest('SHA-256',data),signal);
+          cacheKey=JSON.stringify([format,item.kind,Array.from(new Uint8Array(digest))]);
+        }catch{signal.throwIfAborted();}
+      }
+      if(cache&&cacheKey){
+        const hit=cache.get(cacheKey);
+        if(hit&&record.total===null){
+          record.total=hit.total;
+          record.pages=hit.pages.slice();
+          browserTiming('study:document-cache-hit',now());
+          if(!retry||record.pages.every(isTrusted)){
+            publish('Processed '+label());
+            continue;
+          }
+        }
+      }
+      const remember=()=>{
+        if(!cache||!cacheKey||record.error||record.total===null||record.pages.some(page=>page.status==='pending'||page.method==='manual')||!record.pages.some(page=>page.text))return;
+        if(cache.size>=12&&!cache.has(cacheKey))cache.delete(cache.keys().next().value!);
+        cache.set(cacheKey,{...record,pages:record.pages.slice()});
+      };
       if(format==='word'||format==='slides'){
         try {
           const pages=await (await import('./office-text')).readOfficeText(item.file,format,signal);
@@ -62,6 +90,7 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
               questions:countQuestions(usable,item.kind==='Past paper'),
               reason:usable?'':'No editable text found. Verify the content or attach a screenshot to scan it.'};
           });
+          remember();
           publish('Processed '+label());
         }catch(error){
           signal.throwIfAborted();
@@ -78,7 +107,8 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
         try {
           publish('Scanning '+label());
           ocr??=await (await import('./ocr')).createOcr(signal);
-          const reading=await ocr.readImage(item.file,item.kind,Boolean(retry));
+          const started=now();
+          const reading=await ocr.readImage(item.file,item.kind,Boolean(retry)).finally(()=>browserTiming('study:ocr',started));
           const prior=cached.text?{text:cached.text,confidence:cached.confidence??null,variant:'Prior image'}:null;
           const best=chooseReading(prior,reading,item.kind);
           const quality=pageQuality(best.text,item.kind,best.confidence);
@@ -92,10 +122,11 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
           ocr=undefined;
           record.pages=[{...cached,status:cached.text?'review':'failed',method:'ocr',reason:'The image could not be read. Check the original or retry.'}];
         }
+        remember();
         publish('Processed '+label());
         continue;
       }
-      const data=await abortable(item.file.arrayBuffer(),signal);
+      data??=await abortable(item.file.arrayBuffer(),signal);
       const task=getDocument({data,enableXfa:false,wasmUrl:new URL('/pdfjs/wasm/',location.href).href});
       let destruction:Promise<void>|undefined;
       const destroy=()=>destruction??=task.destroy();
@@ -115,15 +146,19 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
           let text='';
           try {
             page=await abortable(document.getPage(number),signal,stop);
+            const textStarted=now();
             try {text=formatPageText(await nativeText(page,signal),item.kind);}
             catch {signal.throwIfAborted();}
+            finally{browserTiming('study:pdf-text',textStarted);}
             const quality=pageQuality(text,item.kind);
             if(quality.status==='extracted') {
               record.pages[index]={number,text,status:'extracted',method:'pdf-text',questions:quality.questions,reason:''};
               continue;
             }
             ocr??=await (await import('./ocr')).createOcr(signal);
-            const result=await ocr.read(page,item.kind,Boolean(retry),pass=>publish('Scanning '+label(number)+' · pass '+pass));
+            const scanStarted=now();
+            const result=await ocr.read(page,item.kind,Boolean(retry),pass=>publish('Scanning '+label(number)+' · pass '+pass))
+              .finally(()=>browserTiming('study:ocr',scanStarted));
             const previous=cachedPage.text&&cachedPage.method==='ocr'
               ?{text:cachedPage.text,confidence:cachedPage.confidence??null,variant:'prior pass'}:null;
             const reading=result.best?chooseReading(previous,result.best,item.kind):previous;
@@ -148,6 +183,7 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
             if(number%3===0)await new Promise<void>(resolve=>setTimeout(resolve,0));
           }
         }
+        remember();
       }catch {
         signal.throwIfAborted();
         record.error='This PDF could not be opened. It may be damaged or password-protected.';
@@ -159,6 +195,7 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
     return records;
   }finally{
     await ocr?.close().catch(()=>{});
+    browserTiming('study:attachments',extractionStarted);
   }
 }
 

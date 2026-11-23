@@ -96,3 +96,18 @@ it('cancels processing, releases the worker and page, and leaves later pages pen
   const calls=vi.mocked(run.onUpdate).mock.calls;
   expect(calls.at(-1)?.[0].documents[0].pages.map(page=>page.status)).toEqual(['extracted','pending','pending','pending']);
 });
+
+it('reuses OCR for identical file bytes with a new attachment ID and preserves the new filename',async()=>{
+  const previous=globalThis.crypto;
+  vi.stubGlobal('crypto',{subtle:{digest:async(_algorithm:string,data:ArrayBuffer)=>data}});
+  try{
+    mock.native=new Set();mock.read.mockReset();
+    mock.read.mockResolvedValue(reading(1));
+    const cache=new Map();
+    const first=await extractDocuments([item(31,1)],{...options(),cache});
+    const second=await extractDocuments([item(32,1)],{...options(),cache});
+    expect(mock.read).toHaveBeenCalledOnce();
+    expect(second[0]).toMatchObject({id:32,name:'paper32.pdf',pages:first[0].pages});
+    expect(documentComplete(second[0])).toBe(true);
+  }finally{vi.stubGlobal('crypto',previous);}
+});

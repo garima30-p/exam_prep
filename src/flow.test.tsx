@@ -64,6 +64,7 @@ it('teaches a recognized exam subject immediately and caches each learning depth
     await act(async()=>button('Study').click());
     expect(host.querySelector('.book-page-number')?.textContent).toContain('Page 2');
     expect(requests.find(request=>request.learningMode==='study')).toMatchObject({topic:'Process Management'});
+    await vi.waitFor(()=>expect(requests.some(request=>request.task==='practiceBatch')).toBe(true));
     expect(requests.find(request=>request.task==='practiceBatch')).toMatchObject({topic:'Process Management'});
     await act(async()=>button('Last Minute').click());
     expect(requests.filter(request=>request.task==='notes')).toHaveLength(3);

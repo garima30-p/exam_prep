@@ -1,3 +1,4 @@
+import { now, elapsed, serverTiming } from './performance.mjs';
 import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, diagnoseSearchQuota, generateStudyReply, webSearchStatus } from './study-ai.mjs';
 import { administrativeLine, administrativeSection, syllabusContentsHeading, syllabusEnd, syllabusTopicLabel, syllabusUnit } from './study-material.mjs';
 import { describeLearning, makeLearningPlan } from './learning.mjs';
@@ -252,6 +253,8 @@ function validate(body) {
 }
 
 export async function handle(request,env) {
+  const started=now(),metrics=[];
+  const finish=response=>serverTiming(response,[...metrics,['request',elapsed(started)]]);
   const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
   const json=(data,status=200)=>Response.json(data,{status,headers});
   const path=new URL(request.url).pathname;
@@ -287,16 +290,18 @@ export async function handle(request,env) {
     const input=JSON.parse(raw);
     if(path==='/api/coach'){
       if(!input||typeof input!=='object')return json({error:'Invalid AI request.',code:'invalid_request'},400);
-      try{return await generateStudyReply(input,env,request);}
+      try{return finish(await generateStudyReply(input,env,request,metrics));}
       catch{return json({error:aiErrors.request_failed,code:'request_failed'},502);}
     }
     const materials=validate(input);
     if (!materials) return json({error:'Invalid material or page structure.'},400);
+    const ranking=now();
     const {questions,topics}=buildPlan(materials,{learning:input.learning===true});
     const plan=makeLearningPlan(questions,topics,
       typeof input.minutes==='number'&&Number.isFinite(input.minutes)?input.minutes:0,
       typeof input.pattern==='string'?input.pattern.slice(0,600):'',input.familiarity);
-    return json({questions,topics,plan,generatedCoach:coachEnabled(env)});
+    metrics.push(['neo',elapsed(ranking)]);
+    return finish(json({questions,topics,plan,generatedCoach:coachEnabled(env)}));
   } catch {
     return json({error:'Could not read the supplied material.'},400);
   } finally {

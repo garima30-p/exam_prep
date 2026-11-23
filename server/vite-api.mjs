@@ -15,7 +15,12 @@ export default function backend() {
         ...(incoming.method==='GET'||incoming.method==='HEAD'?{}:{body:Readable.toWeb(incoming),duplex:'half'})});
       const response = await handle(request);
       outgoing.writeHead(response.status,Object.fromEntries(response.headers));
-      outgoing.end(Buffer.from(await response.arrayBuffer()));
+      if(response.body){
+        const body=Readable.fromWeb(response.body);
+        outgoing.once('close',()=>body.destroy());
+        body.on('error',()=>outgoing.destroy());
+        body.pipe(outgoing);
+      }else outgoing.end();
     } catch {
       outgoing.writeHead(500,{'Content-Type':'application/json','Cache-Control':'no-store'});
       outgoing.end(JSON.stringify({error:'The analysis service could not complete this request.'}));

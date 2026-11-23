@@ -1,3 +1,4 @@
+import {browserTiming,now} from '../server/performance.mjs';
 import { demoApi } from './api';
 import type { Analysis, ExamApi, RankedQuestion } from './api';
 import type { SyllabusTopic } from '../server/optimizer.mjs';
@@ -5,12 +6,11 @@ import type { LearningPlan } from '../server/learning.mjs';
 import { makeLearningPlan } from '../server/learning.mjs';
 import { EMBEDDING_LIMIT, groupQuestions } from '../server/semantic.mjs';
 import { browserEmbeddings } from './embeddings';
-import { extractDocuments } from './documents';
 import { documentComplete, isTrusted } from './document-state';
 
 export const liveApi:ExamApi = {
   parse:demoApi.parse,
-  prepare:extractDocuments,
+  prepare:(files,options)=>import('./documents').then(({extractDocuments})=>extractDocuments(files,options)),
   async analyze(context, files, prompt, options):Promise<Analysis> {
     const warnings:string[]=[];
     if(files.length&&!options?.documents)throw new Error('Read and check the attachments before opening the notes.');
@@ -35,11 +35,19 @@ export const liveApi:ExamApi = {
     if(!response.ok||!data.questions||!data.topics||!data.plan) throw new Error(data.error||'Analysis service unavailable.');
     options?.onPlanning?.();
     const prompts=data.questions.slice(0,EMBEDDING_LIMIT).map(question=>question.prompt);
+    if(prompts.length>1&&options?.onPreliminary){
+      options.onPreliminary({questions:data.questions,warnings:[...warnings],generatedCoach:data.generatedCoach,
+        optimization:{candidates:data.questions,topics:data.topics,plan:data.plan}});
+    }
+    const embeddingStarted=now();
     const vectors=await browserEmbeddings(prompts,options?.signal);
+    browserTiming('study:embeddings',embeddingStarted);
     options?.signal?.throwIfAborted();
     if(prompts.length>1&&!vectors)warnings.push('Semantic matching was unavailable. Exact question matching was used.');
+    const rankingStarted=now();
     const {questions,topics,mode}=groupQuestions(data.questions,data.topics,vectors,false);
     const plan=mode==='semantic'?makeLearningPlan(questions,topics,context.minutes,context.pattern,context.familiarity):data.plan;
+    browserTiming('study:neo-client',rankingStarted);
     return {questions,warnings,generatedCoach:data.generatedCoach,optimization:{candidates:questions,topics,plan}};
   },
   chat(message,questions) {

@@ -16,6 +16,7 @@ export type ExtractedDocument = {id:number;name:string;total:number|null;pages:E
 export type ExtractionUpdate = {documents:ExtractedDocument[];message:string};
 export type PrepareOptions = {
   records:readonly ExtractedDocument[];
+  cache?:Map<string,ExtractedDocument>;
   signal:AbortSignal;
   retry?:boolean;
   onUpdate:(update:ExtractionUpdate)=>void;

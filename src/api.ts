@@ -22,7 +22,7 @@ export type Analysis = {questions:readonly Question[];warnings:string[];generate
 export interface ExamApi {
   prepare?(materials:readonly Material[],options:PrepareOptions):Promise<ExtractedDocument[]>;
   parse(prompt:string):Context;
-  analyze(context:Context, materials:readonly Material[], prompt:string,options?:{learning?:boolean;documents:readonly ExtractedDocument[];signal?:AbortSignal;onPlanning?:()=>void}):Promise<Analysis>;
+  analyze(context:Context, materials:readonly Material[], prompt:string,options?:{learning?:boolean;documents:readonly ExtractedDocument[];signal?:AbortSignal;onPlanning?:()=>void;onPreliminary?:(analysis:Analysis)=>void}):Promise<Analysis>;
   chat(message:string, questions:readonly Question[]):string;
 }
 

@@ -77,3 +77,25 @@ it('fills a short practice batch once and excludes previously returned questions
  expect(run).toHaveBeenCalledTimes(2);
  expect(JSON.parse(run.mock.calls[1][1].messages[1].content).exclude).toContain(first);
 });
+
+it('coalesces simultaneous equivalent public searches and reuses them without reserving extra quota',async()=>{
+ const provider=vi.fn(async()=>Response.json({results:[{
+  url:'https://cs.stanford.edu/concurrency/dbms-locks.html',title:'Database Management Systems: Database deadlock',
+  content:'Database deadlock can occur when transactions wait in a cycle for locks.',
+ }]}));
+ vi.stubGlobal('fetch',provider);
+ const reserve=vi.fn(async()=>budget());
+ const run=vi.fn(async()=>({response:{insufficientEvidence:false,sections:[{
+  text:'Database deadlock can occur when transactions wait in a cycle for locks.',
+  citations:[{id:'W1',quote:'Database deadlock can occur when transactions wait in a cycle for locks.'}]
+ }]}}));
+ const env={STUDY_AI_ENABLED:'true',AI:{run},TAVILY_API_KEY:'runtime-secret',
+  STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:reserve})}};
+ const input={task:'notes',mode:'auto',subject:'DBMS',topic:'database deadlock',topics:['deadlock'],
+  request:'Explain database deadlock',academicGrounding:true};
+ const replies=await Promise.all([handle(post(input),env),handle(post(input),env),handle(post(input),env)]);
+ expect(replies.every(response=>response.ok)).toBe(true);
+ expect(provider).toHaveBeenCalledOnce();
+ expect(reserve).toHaveBeenCalledOnce();
+ expect((await (await handle(post(input),env)).json()).webSearch).toMatchObject({cached:true,attempted:false});
+});
