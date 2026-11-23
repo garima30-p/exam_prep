@@ -8,6 +8,7 @@
   --ink: #242628;
   --page: #f7f7f5;
   --muted: #575c62;
+  --hint-text: #575c62;
   --line: #d6d7d4;
   --surface: #fff;
   --subtle: #eeefec;
@@ -60,10 +61,9 @@ button:disabled{opacity:.55;cursor:default}
 .link:hover{text-decoration:underline}
 #root{display:flex;flex-direction:column;min-height:100dvh}
 .landing,.workspace{position:relative;display:flex;flex:1;flex-direction:column}
-.hero{text-align:center;padding:clamp(2rem,7vw,4.5rem) 0 1.3rem}
-.workspace .hero{padding-top:2.75rem}
-.hero h1{font-size:clamp(2.25rem,7vw,4.5rem);font-weight:650;letter-spacing:-.065em;line-height:1.06;margin:0}
-.hero em{color:var(--accent);font-style:normal}
+.hero{position:relative;text-align:center;padding-bottom:.75rem}
+.hero h1{color:var(--hint-text);font-size:clamp(1rem,3.5vw,1.25rem);font-weight:400;line-height:1.4;margin:0}
+[data-theme^="anime-"]{--hint-text:#c7c7c7}
 .footer{justify-content:center}
 .setup{max-width:780px;margin:auto}
 .composer,.coverage,.followup{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:1.1rem}
@@ -157,17 +157,6 @@ dialog::backdrop{background:var(--backdrop)}
 [data-theme="anime-demon-slayer"] body{background:repeating-linear-gradient(46deg,transparent 0 16px,#ff705508 17px 19px,transparent 20px 38px),linear-gradient(145deg,#301b21,transparent 60%)}
 [data-theme="anime-aot"] body{background:repeating-linear-gradient(0deg,transparent 0 28px,#e3ce9709 29px 30px),linear-gradient(122deg,#303b30,transparent 57%)}
 [data-theme="cute"] body{background:radial-gradient(ellipse 38rem 24rem at 18% 12rem,#e3dcff,transparent),radial-gradient(ellipse 35rem 22rem at 86% 10rem,#ffd4e4,transparent),linear-gradient(125deg,#fff1dc,transparent 55%)}
-.hero{position:relative}
-.hero-anime{
-  display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1fr);align-items:center;
-  min-height:clamp(260px,32vw,360px);text-align:left;gap:clamp(.5rem,4vw,3rem);
-  padding:1rem 0;margin-bottom:1rem;
-}
-.hero-anime h1{font-size:clamp(2.5rem,8vw,7rem);line-height:.87}
-.hero-anime h1 em{display:block}
-[data-theme="anime-jjk"] .hero h1{font-style:italic;font-weight:900;text-shadow:0 0 35px #a967ff57}
-[data-theme="anime-demon-slayer"] .hero h1{font-family:Georgia,serif;font-style:italic;letter-spacing:-.05em}
-[data-theme="anime-aot"] .hero h1{font-family:"Arial Narrow","Franklin Gothic Medium",sans-serif;font-weight:900;text-transform:uppercase;letter-spacing:-.065em}
 .character-scene{position:relative;display:grid;place-items:center;isolation:isolate;overflow:hidden;margin:0;min-height:clamp(210px,29vw,340px)}
 .character-portrait{position:relative;width:min(78%,310px);margin:1rem 0;border:1px solid var(--accent);border-radius:var(--radius);overflow:hidden;background:var(--surface);box-shadow:0 0 22px var(--aura-glow);animation:portrait-arrival .24s ease-out both}
 .character-image,.character-fallback{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:contain}
@@ -197,9 +186,6 @@ dialog::backdrop{background:var(--backdrop)}
 [data-theme="anime-aot"] .primary:hover:not(:disabled){box-shadow:inset 0 0 0 2px #ffffff65}
 [data-theme="anime-aot"] :is(.primary,.secondary){border-radius:2px;letter-spacing:.05em}
 [data-theme="cute"]{font-family:ui-rounded,"Trebuchet MS","Segoe UI",sans-serif}
-.hero-cute{padding-bottom:.15rem}
-.hero-cute h1{font-weight:800;letter-spacing:-.05em}
-.hero-cute h1 em{font-family:Georgia,serif;font-weight:400;font-style:italic}
 .cute-desk{display:flex;align-items:end;justify-content:center;gap:clamp(.35rem,4vw,1.6rem);margin:.35rem auto 0}
 .desk-prop{position:relative;width:clamp(62px,16vw,113px);border:0;background:transparent;padding:0;transform-origin:center bottom;touch-action:manipulation}
 .desk-prop[data-prop="kitty"]{width:clamp(92px,22vw,152px)}
@@ -251,8 +237,6 @@ dialog::backdrop{background:var(--backdrop)}
 .study-aura-pulse{position:absolute;inset:0;z-index:-1;border:2px solid var(--accent);border-radius:var(--radius);animation:study-aura .65s ease-out both}
 @keyframes study-aura{from{opacity:.8;transform:scale(.9);box-shadow:0 0 12px var(--aura-glow)}to{opacity:0;transform:scale(1.55)}}
 @media(max-width:550px){
-  .hero-anime,.workspace .hero-anime{grid-template-columns:1fr;text-align:center;padding:1.5rem 0 .3rem}
-  .hero-anime h1 em{display:inline}
   .character-scene{min-height:190px}
   .character-portrait{width:min(64%,210px)}
   .character-options{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -359,6 +343,7 @@ dialog::backdrop{background:var(--backdrop)}
 .unified-composer{position:sticky;margin-block:auto 0;padding-top:.65rem;bottom:var(--composer-inset,0px);z-index:3;padding-bottom:max(.55rem,env(safe-area-inset-bottom));background:var(--page)}
 .unified-composer .composer{padding:.7rem}
 .unified-composer textarea{margin:0 0 .45rem;padding:.25rem;min-height:3rem;max-height:26dvh;font-size:1rem}
+.unified-composer textarea::placeholder{color:var(--hint-text);opacity:1}
 .unified-composer .primary.icon-btn{min-width:44px;min-height:44px}
 .unified-composer .files{max-height:8rem;overflow:auto;margin:.3rem 0}
 .message-actions,.discussion-context{display:flex;align-items:center;gap:.55rem}
@@ -366,9 +351,6 @@ dialog::backdrop{background:var(--backdrop)}
 .discussion-context span{min-width:0;overflow-wrap:anywhere}
 .discussion-context button{flex:none}
 .exam-settings{padding:.25rem .3rem}
-.hero p{color:var(--muted);margin:.65rem 0 0;font-size:.95rem}
-.hero.hero-compact,.workspace .hero.hero-compact{padding:.35rem 0 .7rem}
-.hero-compact h1{font-size:clamp(1.55rem,5vw,2.4rem)}
 .jump-latest{position:absolute;inset:auto .8rem .6rem auto;box-shadow:0 2px 8px #0002}
 .coach-answer{line-height:1.65;overflow-wrap:anywhere}
 .coach-answer h1,.coach-answer h2,.coach-answer h3,.coach-answer h4,.coach-answer h5,.coach-answer h6{font-size:1.06rem;line-height:1.35;font-weight:750;margin:.85rem 0 .25rem}

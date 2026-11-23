@@ -840,8 +840,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     </aside>
     <main id="main" className={'wrap '+(workspaceResult?'workspace':'landing')}>
       {modeButtons('Preparation mode')}
-      <ThemeHero {...theme} headline={mode==='last-minute'?'lag gaye...🙂':'is baar to phod denge'}
-        description="pyq, syllabus, notes kuch bhi h to jldi bhej" compact={workspaceResult}/>
+      <ThemeHero {...theme} headline={mode==='last-minute'?'lag gaye...🙂':'is baar to phod denge'} compact={workspaceResult}/>
       <div className="exam-overview">
         {(context.subject||book?.subject||mode==='last-minute'&&context.minutes>0)&&<p className="summary">{[context.subject||book?.subject,mode==='last-minute'&&context.minutes?context.minutes+' min available':''].filter(Boolean).join(' · ')}</p>}
         {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
@@ -938,7 +937,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <label htmlFor="prompt" className="sr-only">Ask a question or paste notes</label>
           <textarea ref={workspaceInput} id="prompt" value={draft} onChange={event=>setDraft(event.target.value)}
             onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();submitMessage();}}}
-            placeholder={needsTime&&mode==='last-minute'?'How many minutes can you study?':'Ask a question or paste notes…'} rows={2} maxLength={8000}/>
+            placeholder={needsTime&&mode==='last-minute'?'How many minutes can you study?':'pyq, syllabus, notes kuch bhi h to jldi bhej'} rows={2} maxLength={8000}/>
           {files.length>0 && <ul className="files">{files.map(item=><li key={item.id}><Icon name="file"/><span title={item.file.name}>{item.file.name}</span><select disabled={busy} aria-label={'Type for '+item.file.name} value={item.kind} onChange={e=>modifyFile(item.id,e.target.value)}>{['Unclassified','Syllabus','Past paper','Notes','Administrative','Unreadable'].map(k=><option key={k}>{k}</option>)}</select><button disabled={busy} type="button" className="icon-btn" aria-label={'Remove '+item.file.name} onClick={()=>modifyFile(item.id)}><Icon name="close"/></button></li>)}</ul>}
           <div className="composer-actions">
             <input hidden ref={input} type="file" accept={acceptedDocuments} multiple onChange={(e:ChangeEvent<HTMLInputElement>)=>{attachment(e.target.files);e.target.value='';}}/>
