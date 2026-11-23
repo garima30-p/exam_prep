@@ -62,6 +62,7 @@ button:disabled{opacity:.55;cursor:default}
 #root{display:flex;flex-direction:column;min-height:100dvh}
 .landing,.workspace{position:relative;display:flex;flex:1;flex-direction:column}
 .hero{position:relative;text-align:center;padding-bottom:.75rem}
+.hero:empty{display:none}
 .hero h1{color:var(--hint-text);font-size:clamp(1rem,3.5vw,1.25rem);font-weight:400;line-height:1.4;margin:0}
 [data-theme^="anime-"]{--hint-text:#c7c7c7}
 .footer{justify-content:center}
