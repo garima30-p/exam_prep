@@ -87,7 +87,7 @@ it('teaches a recognized exam subject immediately and caches each learning depth
 
 it('uses only the displayed notes for recall and retains original historical question evidence in the quiz',()=>{
   const question={...fixture[11],topic:'Deadlock',historical:true};
-  const page=bookOutline({questions:[question],warnings:[]},'Operating Systems','',[]).find(unit=>unit.title==='Deadlock')!;
+  const page=bookOutline({questions:[question],warnings:[]},'Operating Systems','',[],[{title:'Deadlock',group:''}]).find(unit=>unit.title==='Deadlock')!;
   const notes='Deadlock occurs when processes wait indefinitely for resources held by one another.';
   const recall=reviewItems(page,notes,false);
   expect(recall).toHaveLength(1);
@@ -95,4 +95,11 @@ it('uses only the displayed notes for recall and retains original historical que
   expect(recall[0]).not.toHaveProperty('sources');
   const quiz=reviewItems(page,notes,true);
   expect(quiz[0]).toMatchObject({prompt:question.prompt,sources:[question.source]});
+});
+
+it('does not use ranked question fragments as navigation titles even without a syllabus',()=>{
+ const historical={...fixture[11],topic:'Command',prompt:'Describe command processing in operating systems.',historical:true};
+ const [root,...extra]=bookOutline({questions:[historical],warnings:[]},'Operating Systems','',[]);
+ expect(extra).toEqual([]);
+ expect(root.questions).toEqual([historical]);
 });

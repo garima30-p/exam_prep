@@ -34,3 +34,40 @@ it('recognizes structured science and commerce headings containing numbers',()=>
  expect(parseSyllabus([science]).map(item=>item.title)).toEqual(['Organic Chemistry','SN1 and SN2 Reactions','Carbon-13 NMR']);
  expect(parseSyllabus([commerce]).map(item=>item.title)).toEqual(['Financial Reporting','IFRS 16','Taxation']);
 });
+
+it('reconstructs source-supported compounds and rejects noise and prose from OCR',()=>{
+ const text=[
+  'Course Title: Operating Systems','Details of the Course','Unit I: Process Management',
+  'EN Ton','Operating','Command','System','Calls, Types of system calls...',
+  'Process','Synchronization','- Critical Section','- Peterson’s Solution','- Semaphores','- CPU','- I/O',
+  '11. Suggested Books','- A Book on Systems','References','A textbook title'
+ ].join('\n');
+ const headings=parseSyllabus([{number:1,text,method:'ocr'}]);
+ const titles=headings.map(x=>x.title);
+ expect(titles).toEqual(['Process Management','System Calls','Process Synchronization','Critical Section','Peterson’s Solution','Semaphores','CPU','I/O']);
+ expect(headings.find(x=>x.title==='System Calls')).toMatchObject({page:1,line:7,excerpt:'System Calls, Types of system calls...',validation:'structured-ocr'});
+ expect(headings.find(x=>x.title==='Critical Section')?.group).toBe('Process Synchronization');
+});
+
+it('rejects an exam heading and command phrases even when a paper is labelled as a syllabus',()=>{
+ const text='END SEMESTER EXAMINATION\nName of the Course: Operating Systems\nUnit I: Operating\n- Explain system calls.\n- Command';
+ expect(parseSyllabus([{number:1,text,method:'ocr'}])).toEqual([]);
+});
+
+it('keeps DBMS acronyms and merges duplicate singular and plural headings with provenance',()=>{
+ const text='Course Title: Database Management Systems\nCourse Contents\nUnit 1: Relational Model\n- SQL\n- ACID\n- Functional Dependencies\n- Functional Dependency\n- Database Transactions\nUnit 2: Concurrency Control\n- Deadlock';
+ const result=parseSyllabus([page(2,text)]);
+ expect(result.map(topic=>topic.title)).toEqual(['Relational Model','SQL','ACID','Functional Dependencies','Database Transactions','Concurrency Control','Deadlock']);
+ expect(result.find(topic=>topic.title==='SQL')).toMatchObject({subject:'Database Management Systems',unit:1,group:'Relational Model',page:2,line:4});
+});
+
+it('does not confuse introductory prose and biographies with a week-by-week course outline',()=>{
+ const pages=[page(1,'Course Outline:\nWhile database systems vary, they share common structures.\nAbout the Instructor:\nProf. Sample received an engineering degree.'),
+  page(2,'Week 1: Relational Model\nWeek 2: Structured Query Language (SQL)\nWeek 3: Concurrency Control')];
+ expect(parseSyllabus(pages,'Databases').map(topic=>topic.title)).toEqual(['Relational Model','Structured Query Language (SQL)','Concurrency Control']);
+});
+
+it('recovers a Roman unit marker split by OCR without turning it into a topic',()=>{
+ const pages=[{number:1,method:'ocr',text:'Course Contents\nUnit II: Process Synchronization\nUnit Ill: Deadlock Prevention\n- CPU'}];
+ expect(parseSyllabus(pages,'Operating Systems').find(heading=>heading.title==='Deadlock Prevention')).toMatchObject({unit:3});
+});

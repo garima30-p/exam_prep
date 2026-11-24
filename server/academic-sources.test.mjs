@@ -99,3 +99,21 @@ it('coalesces simultaneous equivalent public searches and reuses them without re
  expect(reserve).toHaveBeenCalledOnce();
  expect((await (await handle(post(input),env)).json()).webSearch).toMatchObject({cached:true,attempted:false});
 });
+
+it('builds a general topic map from an inspected curriculum without a model call',async()=>{
+ const run=vi.fn();
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(
+  '<h2>Course Contents:</h2><ol><li>Introduction: system calls.</li><li>Process Synchronization: semaphores and race conditions.</li></ol>',
+  {headers:{'content-type':'text/html'}}
+ )));
+ try{
+  const response=await handle(post({task:'outline',subject:'Operating Systems',academicGrounding:true}),{STUDY_AI_ENABLED:'true',AI:{run}});
+  expect(response.status).toBe(200);
+  const payload=await response.json();
+  expect(payload.topics).toEqual(expect.arrayContaining([
+   expect.objectContaining({title:'System calls',reference:expect.objectContaining({url:'https://cse.iitk.ac.in/pages/CS330.html',category:'academic-reference'})}),
+   expect.objectContaining({title:'Process Synchronization',validation:'published-curriculum'}),
+  ]));
+  expect(run).not.toHaveBeenCalled();
+ }finally{vi.unstubAllGlobals();}
+});

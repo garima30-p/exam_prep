@@ -1,6 +1,6 @@
 import {readStudyEvents,studyEvent} from './study-stream.mjs';
 import {now,elapsed} from './performance.mjs';
-import {academicScope,academicQuery,academicResult,publishedCourse} from './academic-sources.mjs';
+import {academicScope,academicQuery,academicResult,publishedCourse,academicOutline} from './academic-sources.mjs';
 import { checkStudyAnswer } from './study-citations.mjs';
 import { questionRejection } from './page-text.mjs';
 import { administrativeLine } from './study-material.mjs';
@@ -341,7 +341,7 @@ async function searchProvider(query,env,request,policy,complete,metrics){
 }
 
 const assignWebIds=sources=>sources.slice(0,4).map((source,index)=>({...source,id:'W'+(index+1)}));
-async function academicReferences(input,env,request,requestId,{course=false,fallback=false,metrics=[]}={}){
+async function academicReferences(input,env,request,requestId,{course=false,fallback=false,curriculum=false,metrics=[]}={}){
  const subject=clean(input.subject,100);
  const topic=course?'':clean(input.topic,100);
  const scope=academicScope(input.university);
@@ -356,10 +356,11 @@ async function academicReferences(input,env,request,requestId,{course=false,fall
  const unique=sources=>[...new Map(sources.slice().reverse().map(source=>[source.url,source])).values()].reverse();
  let references=unique(institutional);
  let search=retrieved;
- if(fallback&&!references.some(source=>source.category==='academic-reference'&&source.status!=='page-inspected')){
+ if(fallback&&!(curriculum?references.some(source=>source.scopeOutline?.length):
+  references.some(source=>source.category==='academic-reference'&&source.status!=='page-inspected'))){
   const query=summarySearchTopic(subject,[topic]);
   if(query){
-   search=await retrieveWeb(query,env,request,requestId,{subject,topic},metrics);
+   search=await retrieveWeb(curriculum?query+' university course syllabus':query,env,request,requestId,{subject,topic,course:curriculum},metrics);
    references=unique([...references,...search.sources]);
   }
  }
@@ -407,6 +408,10 @@ async function generateLearningContent(input,env,request,metrics){
  const subject=clean(input.subject,100);
  const topic=clean(input.topic,100);
  if(!subject||(outline?false:!topic))return json({error:'Enter a subject or topic.'},400);
+ if(outline&&input.academicGrounding===true){
+  const references=await academicReferences(input,env,request,crypto.randomUUID(),{course:true,fallback:true,curriculum:true,metrics});
+  return json({topics:academicOutline(references.sources),webSearch:references.webSearch});
+ }
  const count=Number.isSafeInteger(input.count)?Math.min(10,Math.max(1,input.count)):6;
  const previous=Array.isArray(input.exclude)?input.exclude.slice(-80).map(value=>clean(value,600)).filter(Boolean):[];
  const format=clean(input.format,80);

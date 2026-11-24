@@ -1,3 +1,4 @@
+import {parseSyllabus,topicKey,validatedTopicTitle} from './study-material.mjs';
 import {studySubject,publicStudyConcepts} from './coach-topics.mjs';
 import {readQuestionCue,questionRejection} from './page-text.mjs';
 
@@ -78,7 +79,11 @@ export function academicResult(result,policy){
   if(publishesPaper&&!questions.length)return null;
   const syllabus=/syllabus|course contents|curriculum|course outline/i.test(title+' '+snippet+' '+raw.slice(0,1800));
   const category=questions.length?'official-pyq':verifiedInstitution&&syllabus&&(!policy.scope.code||codeMatches)?'official-syllabus':'academic-reference';
-  return {kind:'web',url:url.href,title,publisher,category,excerpt:snippet,status:raw?'provider-page-text':'provider-excerpt',scopeTopics:category==='official-syllabus'?publicStudyConcepts(raw||snippet):[],questions};
+  const scopeOutline=syllabus&&category!=='official-pyq'
+   ?parseSyllabus([{number:1,text:'Course Contents\n'+(raw||snippet)}],subject).map(({title,group,excerpt})=>({title,group,excerpt}))
+   :[];
+  return {kind:'web',url:url.href,title,publisher,category,excerpt:snippet,status:raw?'provider-page-text':'provider-excerpt',scopeOutline,
+   scopeTopics:scopeOutline.map(topic=>topic.title),questions};
  }catch{return null;}
 }
 
@@ -118,6 +123,30 @@ export async function publishedCourse(scope,subject,topic=''){
  const entry=concept?verifiedCourse.entries.find(value=>value.toLowerCase().includes(concept)):verifiedCourse.entries.find(value=>/introduction/i.test(value));
  if(concept&&!entry)return [];
  const excerpt=(entry??verifiedCourse.entries[0]).slice(0,650);
+ const scopeOutline=[];
+ for(const paragraph of verifiedCourse.entries){
+  const heading=validatedTopicTitle(paragraph.split(':')[0],{anchored:true,subject});
+  const group=heading&&!/^introduction$/i.test(heading)?heading:'';
+  if(group)scopeOutline.push({title:group,group:'',excerpt:paragraph.slice(0,650)});
+  for(const label of publicStudyConcepts(paragraph)){
+   if(topicKey(label)===topicKey(group))continue;
+   scopeOutline.push({title:label.replace(/^./,letter=>letter.toUpperCase()),group,excerpt:paragraph.slice(0,650)});
+  }
+ }
  return [{kind:'web',url:officialCourse,title,publisher:'IIT Kanpur',category:scope.domain?'official-syllabus':'academic-reference',
-  status:'page-inspected',excerpt,scopeTopics:publicStudyConcepts(verifiedCourse.entries.join(' ')),questions:[]}];
+  status:'page-inspected',excerpt,scopeOutline,scopeTopics:scopeOutline.map(topic=>topic.title),questions:[]}];
+}
+
+
+export function academicOutline(sources){
+ const usable=sources.filter(source=>source.category!=='official-pyq'&&source.scopeOutline?.length);
+ const official=usable.filter(source=>source.category==='official-syllabus');
+ const seen=new Set();
+ return (official.length?official:usable).flatMap(source=>source.scopeOutline.flatMap(topic=>{
+  const key=topicKey(topic.title);
+  if(!key||seen.has(key))return [];
+  seen.add(key);
+  const {scopeOutline:_,scopeTopics:__,questions:___,...reference}=source;
+  return [{title:topic.title,group:topic.group,validation:'published-curriculum',reference:{...reference,excerpt:topic.excerpt}}];
+ })).slice(0,24);
 }

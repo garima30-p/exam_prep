@@ -3,7 +3,7 @@ import type {Source} from './api';
 import type {BookPage} from './study-book';
 
 export type WebEvidence={kind:'web';id:string;title:string;url:string;publisher?:string;category?:'official-syllabus'|'official-pyq'|'academic-reference';
-  excerpt?:string;supportingQuote?:string;status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[]};
+  excerpt?:string;supportingQuote?:string;status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[];scopeOutline?:{title:string;group:string;excerpt:string}[]};
 export type LearningSource=(Source & {kind:'uploaded';id:string})|WebEvidence;
 export type AcademicResult={sources:WebEvidence[];scope:{requested:boolean;institution?:string;officialSyllabus:boolean;officialPyq:boolean};
   officialSearch?:{code:string;providerStatus?:number|null;cached?:boolean;attempted?:boolean}|null;webSearch?:{code:string}|null};

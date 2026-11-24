@@ -1,3 +1,5 @@
+import {academicOutline} from '../server/academic-sources.mjs';
+import type {TopicOutline} from './study-book';
 import type {ReactNode} from 'react';
 import {warmEmbeddings} from './embeddings';
 import {readStudyEvents} from '../server/study-stream.mjs';
@@ -98,6 +100,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const drawerPanel=useRef<HTMLElement>(null);
   const [savedBook,setBook]=useState<{id:string;subject:string;pages:BookPage[];university:string;promptKey:string}|null>(null);
   const [activeTopicId,setActiveTopicId]=useState('');
+  const [expandedTopics,setExpandedTopics]=useState<Record<string,boolean>>({});
   const practice=usePractice();
   const [selectedQuestions,setSelectedQuestions]=useState<Record<string,PracticeItem>>({});
   const [bookContent,setBookContent]=useState<Record<string,BookContent>>({});
@@ -315,7 +318,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           body:JSON.stringify({task:'notes',mode:'auto',academicGrounding:true,university:book.university,studyUnit:true,learningMode:mode,minutes:context.minutes||undefined,
             subject:book.subject,topics:[unit.title],topic:unit.title,
             request:'Teach '+unit.title+' to a beginner. Start with the foundation, explain the essential ideas and relationships, then give a short takeaway.',
-            priorities:unit.questions.slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages.map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'}))})});
+            priorities:(unit.priorities??unit.questions).slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages.map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'}))})});
         const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
         if(!response.ok||!data.explanation?.trim()){
           throw new Error(data.code==='usage_limit'?'The AI usage limit has been reached.':data.code==='citation_validation_failed'
@@ -347,7 +350,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     practice.reset();setQuiz(null);setQuizAttempts({});
     setSelectedQuestions({});
     bookRequest.current?.abort();bookRequest.current=null;setLoadingPage(null);
-    setBook(null);setActiveTopicId('');setBookContent({});setBookErrors({});setStudied({});setRecallPage(null);
+    setBook(null);setActiveTopicId('');setExpandedTopics({});setBookContent({});setBookErrors({});setStudied({});setRecallPage(null);
   }
   const attachment = (incoming:FileList|null) => {
     if (!incoming || busy) return;
@@ -451,11 +454,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const extracted=revise(focus?'':inputPrompt,records,inspected.files,adjusted.subject);
       if(records.some(document=>!documentComplete(document))&&!extracted&&
         !records.some(document=>document.pages.some(page=>page.text.trim()&&isTrusted(page)))){
-        setNotice('No readable material was found. Check the original or retry the attachment.');
         setAwaitReview(true);
-        return;
-      }
-      setAwaitReview(false);
+        if(!requestedSubject&&!focus){
+          setNotice('No readable material was found. Check the original or retry the attachment.');
+          return;
+        }
+        setNotice('Some pages could not be verified. The topic map will use published curriculum if one is available.');
+      }else setAwaitReview(false);
       const namedUniversity=/\b(?:university|iit\b|gehu\b|geu\b|mit\b|[a-z]+\.ac\.[a-z]+|[a-z]+\.edu)\b/i.test(inputPrompt);
       const university=namedUniversity?inputPrompt.slice(0,500):(!changingSubject?savedBook?.university??'':'');
       const provisionalSubject=learningSubject(adjusted.subject||inspected.subject,adjusted.subject||inspected.subject)||focus||extracted?.title||'';
@@ -500,13 +505,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           setAcademicByScope(current=>({...current,[bookId]:course}));
         }
       }
-      const officialTopics=(course?.sources??[]).filter(source=>source.category==='official-syllabus').flatMap(source=>source.scopeTopics??[]);
-      const outline=inspected.outline.length?inspected.outline:officialTopics.map(title=>({title:title.replace(/^./,letter=>letter.toUpperCase()),group:'',source:undefined}));
-      const needsOutline=!first.partial&&!outline.length&&!analysis.questions.length&&!focus;
+      const outline:TopicOutline[]=inspected.outline.length?inspected.outline:academicOutline(course?.sources??[]);
+      const needsOutline=!first.partial&&!outline.length&&!focus;
       const sessionPrompt=studySessionPrompt(inputPrompt);
       const describeSource=(source:Source)=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'});
-      const initialRanking=analysis;
-      const buildPages=(topics:typeof outline,ranked=initialRanking,passages=extracted?.passages??[])=>bookOutline(ranked,subject,focus,passages,topics).map(page=>({...page,
+      let latestRanking:Analysis=analysis;
+      let latestOutline=outline;
+      const buildPages=(topics:typeof outline,ranked:Analysis=latestRanking,passages=extracted?.passages??[])=>bookOutline(ranked,subject,focus,passages,topics).map(page=>({...page,
         passages:page.passages.map(describeSource),
         questions:page.questions.map(question=>({...question,answerSource:question.answerSource?describeSource(question.answerSource):null}))
       }));
@@ -533,14 +538,15 @@ export function App({api=demoApi}:{api?:ExamApi}) {
               const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
                 signal:AbortSignal.any([operation.signal,AbortSignal.timeout(25000)]),
                 body:JSON.stringify({task:'outline',subject,university,academicGrounding:true,sources:extracted?.passages??[]})});
-              const data=await response.json() as {topics?:typeof outline};
-              if(!response.ok||!Array.isArray(data.topics))throw new Error();
+              const data=await response.json() as {topics?:TopicOutline[]};
+              if(!response.ok||!Array.isArray(data.topics)||!data.topics.length)throw new Error();
               if(!operation.signal.aborted){
-                const pages=buildPages(data.topics);
+                latestOutline=data.topics;
+                const pages=buildPages(latestOutline);
                 setBook(current=>current?.id===bookId&&current.promptKey===sessionPrompt?{...current,pages}:current);
               }
             }catch{
-              if(!operation.signal.aborted)setNotice('The full topic outline is unavailable. You can still start with the subject or enter a specific topic.');
+              if(!operation.signal.aborted)setNotice('No reliable course outline was found. Review the attachment or enter a specific topic.');
             }
           })();
         }};
@@ -551,7 +557,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         setProcessingMessage('Checking related questions…');
         const final=await refinement;
         run.signal.throwIfAborted();
-        const refined=buildPages(outline,final);
+        latestRanking=final;
+        const refined=buildPages(latestOutline,final);
         const originalIds=new Map(pages.map(page=>[page.title,page.id]));
         setBook(current=>current?.id===bookId&&current.promptKey===sessionPrompt?{...current,
           pages:refined.map(page=>({...page,id:originalIds.get(page.title)??page.id}))}:current);
@@ -578,11 +585,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         if(analyzed.current.size>=8)analyzed.current.delete(analyzed.current.keys().next().value!);
         analyzed.current.set(finalKey,final);
         evidenceIds.current=ids;
-        const updated=buildPages(completeInput.outline.length?completeInput.outline:outline,final,
+        latestRanking=final;
+        latestOutline=completeInput.outline.length?completeInput.outline:latestOutline;
+        const updated=buildPages(latestOutline,final,
           revise(focus?'':inputPrompt,completeRecords,included,subject)?.passages??[]);
         setBook(current=>current?.id===bookId&&current.promptKey===sessionPrompt?{...current,pages:updated}:current);
         setResult(final.questions);setWarnings(final.warnings);
-        if(updated.length===1&&!completeInput.outline.length&&!final.questions.length&&!focus){
+        if(updated.length===1&&!completeInput.outline.length&&!focus){
           queueOutline();
           if(mode==='study')outlineRequest.current?.start();
         }
@@ -850,21 +859,43 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     generatedNotes:activeBookContent?{text:activeBookContent.text,references:activeBookContent.references.map(reference=>
       reference.kind==='uploaded'?sourceLabel(reference):reference.title+' · '+reference.url)}:undefined};
   const mapTopic=(page:BookPage,index:number)=><button type="button" className="link"
-    aria-current={bookIndex===index?'location':undefined} onClick={()=>{mapDialog.current?.close();openBookPage(index);}}>
+    aria-current={bookIndex===index?'location':undefined} onClick={()=>{mapDialog.current?.close?.();openBookPage(index);}}>
     {page.title}
   </button>;
   const mapEntries=book?.pages.map((page,index)=>({page,index}))??[];
+  const mapChildren=new Map<string,typeof mapEntries>();
+  for(const entry of mapEntries){
+    const group=entry.page.group;
+    if(!group||group===entry.page.title)continue;
+    const children=mapChildren.get(group)??[];
+    children.push(entry);mapChildren.set(group,children);
+  }
+  const currentAncestors=new Set<string>();
+  let parent=activeBookPage?.group;
+  while(parent&&!currentAncestors.has(parent)){
+    currentAncestors.add(parent);
+    parent=mapEntries.find(entry=>entry.page.title===parent)?.page.group;
+  }
   function mapBranch(entry:typeof mapEntries[number],ancestorIds:readonly string[]=[]):ReactNode{
     const {page,index}=entry;
     if(ancestorIds.includes(page.id))return null;
     const path=[...ancestorIds,page.id];
-    const children=mapEntries.filter(child=>child.page.group===page.title&&child.page.id!==page.id);
-    return <li key={page.id}>{mapTopic(page,index)}{children.length>0&&<ul>
-      {children.map(child=>mapBranch(child,path))}
-    </ul>}</li>;
+    const children=mapChildren.get(page.title)??[];
+    const expanded=expandedTopics[page.id]??currentAncestors.has(page.title);
+    return <li key={page.id}>
+      {mapTopic(page,index)}
+      {children.length>0&&<button type="button" className="link topic-expand" aria-expanded={expanded}
+        aria-label={'Subtopics for '+page.title} onClick={()=>setExpandedTopics(current=>({...current,[page.id]:!expanded}))}>{expanded?'−':'+'}</button>}
+      {expanded&&children.length>0&&<ul>{children.map(child=>mapBranch(child,path))}</ul>}
+    </li>;
   }
+  const mapOrigin=mapEntries.some(entry=>entry.page.scope)?'Uploaded syllabus':
+    mapEntries.some(entry=>entry.page.reference?.category==='official-syllabus')?'Official university syllabus':
+    mapEntries.some(entry=>entry.page.reference)?'General academic outline':
+    'No verified syllabus outline';
   const topicMap=book&&<div className="topic-map">
     {book.pages[0].title===book.subject?mapTopic(book.pages[0],0):<strong>{book.subject}</strong>}
+    <small>{mapOrigin}</small>
     <div className="topic-branch"><ul>{mapEntries.filter(({page,index})=>
       (index!==0||page.title!==book.subject)&&(!page.group||page.group===book.subject||!mapEntries.some(entry=>entry.page.title===page.group))
     ).map(entry=>mapBranch(entry))}</ul></div>
@@ -940,6 +971,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 {current&&theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={0}/>}
                 <h2 tabIndex={current?-1:undefined} ref={current?studyHeading:undefined}>{unit.title}</h2>
               </header>
+              {unit.reference&&<SourceStatus references={[unit.reference]} generated={false} openSource={reference=>open(null,reference)}/>}
               {unit.scope&&<SourceStatus references={[{...unit.scope,kind:'uploaded',id:unit.id}]} generated={false} openSource={reference=>open(null,reference)}/>}
               {mode==='study'&&current&&<h3 className="study-introduction">Introduction</h3>}
               {content?<div className="learning-body">
