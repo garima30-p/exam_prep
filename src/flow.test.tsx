@@ -87,16 +87,31 @@ it('teaches a recognized exam subject immediately and caches each learning depth
   }
 });
 
-it('requires evidence for recall and retains original historical question evidence in the quiz',()=>{
-  const question={...fixture[11],topic:'Deadlock',historical:true};
-  const page=bookOutline({questions:[question],warnings:[]},'Operating Systems','',[],[{title:'Deadlock',group:''}]).find(unit=>unit.title==='Deadlock')!;
-  const notes='Deadlock occurs when processes wait indefinitely for resources held by one another.';
-  const recall=reviewItems(page,{text:notes,references:[]},false);
+it('generates a specific question and cached rubric from the current lesson, and excludes unsupported historical questions',()=>{
+  const question={...fixture[11],topic:'Operating Systems',historical:true,prompt:'Explain one key idea from Operating Systems.'};
+  const page={...bookOutline({questions:[question],warnings:[]},'Operating Systems','',[])[0],questions:[question]};
+  const text='An Operating System provides an interface and services through which applications interact with hardware.';
+  const lesson={text,references:[]};
+  const recall=reviewItems(page,lesson,false);
   expect(recall).toHaveLength(1);
-  expect(recall[0]).toMatchObject({rule:{kind:'unverified'}});
-  const quiz=reviewItems(page,{text:notes,references:[{...question.source,kind:'uploaded',id:'N1',excerpt:notes,documentType:'Notes'}]},true);
-  expect(quiz[0]).toMatchObject({prompt:'What is deadlock?',rule:{kind:'descriptive',rubric:[notes]}});
-  expect(quiz.find(item=>item.historical)).toMatchObject({prompt:question.prompt,sources:[question.source]});
+  expect(recall[0]).toMatchObject({
+    prompt:'What role does an Operating System play?',
+    rule:{kind:'descriptive',referenceAnswer:text,rubric:['an interface and services','through which applications interact with hardware']}
+  });
+  expect(reviewItems(page,lesson,true)).toEqual(recall);
+  expect(reviewItems(page,lesson,false)).toBe(recall);
+  expect(reviewItems(page,{text:'Operating Systems is an important concept in computer science.',references:[]},true)).toEqual([]);
+  expect(reviewItems(page,{text:'A semaphore is a counter that controls access to resources.',references:[]},true)).toEqual([]);
+});
+
+it('keeps validated source choices and independently checkable historical questions',()=>{
+  const prompt='Using FCFS, calculate the average waiting time in milliseconds.\nProcess | Arrival | Burst\nP1 | 0 | 4\nP2 | 1 | 2';
+  const question={...fixture[11],topic:'Operating Systems',historical:true,prompt};
+  const page={...bookOutline({questions:[question],warnings:[]},'Operating Systems','',[])[0],questions:[question]};
+  const excerpt='An operating system is software that manages computer hardware and provides services for applications.\nA semaphore is a counter that controls access to resources.';
+  const quiz=reviewItems(page,{text:excerpt,references:[{...question.source,kind:'uploaded',id:'N1',excerpt,documentType:'Notes'}]},true);
+  expect(quiz.find(item=>item.historical)).toMatchObject({prompt,sources:[question.source],rule:{kind:'numeric'}});
+  expect(quiz.find(item=>item.rule.kind==='choice')).toMatchObject({rule:{kind:'choice',expected:excerpt.split('\n')[0]}});
 });
 
 it('does not use ranked question fragments as navigation titles even without a syllabus',()=>{

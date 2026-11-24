@@ -24,7 +24,7 @@ import { revise } from './revision';
 import { inspectStudyInput } from './study-input';
 import { bookOutline, learningSubject, studySessionPrompt, studyTopic } from './study-book';
 import type { BookPage } from './study-book';
-import { ReviewForm, reviewItems } from './learning-review';
+import { ReviewForm, reviewItems, uniqueReviewItems } from './learning-review';
 import type { ReviewAttempt, ReviewItem } from './learning-review';
 import { usePractice } from './practice';
 import type { AcademicResult, LearningSource, PracticeItem, PracticeTopic } from './practice';
@@ -956,12 +956,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const started=now();
     rememberTopic();
     const eligible=[activeBookPage,...book.pages.filter(page=>page!==activeBookPage&&studied[page.id])];
-    const items=eligible.flatMap(page=>{
+    const items=uniqueReviewItems(eligible.flatMap(page=>{
       if(!page)return [];
       const key=practiceTopic(page)?.key;
       const content=bookContent[mode+':'+key]??bookContent['study:'+key]??bookContent['last-minute:'+key];
       return content?reviewItems(page,content,true,key?practice.batches[key]?.items:undefined):[];
-    }).slice(0,8);
+    }));
     const key=JSON.stringify([book.id,activeBookPage?.id]);
     setQuiz({key,items});
     quizDialog.current?.showModal();

@@ -8,6 +8,34 @@ export function reviewUnavailable(questionId){
  return result(questionId,'needs_review','There is no verified answer or rubric for this question.',null,'unverified');
 }
 
+const studyVerbs={provides:'provide',provide:'provide',stores:'store',store:'store',evicts:'evict',evict:'evict',
+ allocates:'allocate',allocate:'allocate',prevents:'prevent',prevent:'prevent',manages:'manage',manage:'manage',
+ converts:'convert',convert:'convert',translates:'translate',translate:'translate',determines:'determine',determine:'determine'};
+const copula=/^(is|are|means|refers to|occurs when|happens when)$/i;
+const nonspecific=/^(?:an?|the)?\s*(?:it|they|this|these|there|what|which|that|you|we|following|set of|group of|number of|key idea|main idea|important concept|topic|concept|thing|example)\b/i;
+
+export function recallFact(statement){
+ const match=statement.match(/^(.{2,65}?)\s+(is|are|means|refers to|occurs when|happens when|acts as|serves as|provides?|stores?|evicts?|allocates?|prevents?|manages?|converts?|translates?|determines?)\s+(.{12,})[.!]$/i);
+ if(!match)return null;
+ const [,subject,rawVerb,body]=match;
+ const verb=rawVerb.toLowerCase();
+ const term=subject.replace(/^(?:an?|the)\s+/i,'');
+ if(nonspecific.test(subject)||/^system$/i.test(term)||!/^[\p{L}][\p{L}\p{N} /()+’-]*$/u.test(subject)||
+   /\b(?:an? (?:important|key|useful|basic|essential|fundamental) (?:idea|topic|aspect|concept|component|part) (?:in|of|for)\b|an? (?:important|key|useful|basic|essential|fundamental) (?:idea|topic|aspect|concept)|something|as (?:above|follows|described)|covered in|see (?:the|above)|TBD|TODO)\b/i.test(body))return null;
+ const named=/^(?:an?|the)\s|^[A-Z][a-z]{2,}$/i.test(subject)&&!/\b[A-Z]{2,}\b/.test(subject)?subject[0].toLowerCase()+subject.slice(1):subject;
+ const role=verb==='acts as'||verb==='serves as'||(/\b(?:interface|intermediary|bridge)\b/i.test(body)&&(verb==='is'||verb==='provides'));
+ const plural=verb==='are'||(Object.hasOwn(studyVerbs,verb)&&!verb.endsWith('s'));
+ const relation=role?body.match(/\bbetween (.{8,95})$/i)?.[0]:undefined;
+ const prompt=role?'What role does '+named+' play'+(relation?' '+relation:'')+'?':
+  copula.test(verb)?'What '+(plural?'are':'is')+' '+named+'?':
+   'What '+(plural?'do':'does')+' '+named+' '+studyVerbs[verb]+'?';
+ // Split only relations with an explicit second claim. Keep paired participants
+ // such as "between applications and hardware" together.
+ const parts=body.split(/\s+(?=(?:because|through which|so that|and (?:allows?|provides?|prevents?|requires?|stores?|manages?))\b)/i);
+ const rubric=parts.length>1&&parts.every(part=>part.length>=8)&&parts.length<=4?parts:[body];
+ return {term,verb,body:body+statement.at(-1),prompt,referenceAnswer:statement,rubric,evidence:[statement]};
+}
+
 export function verifiedAnswer(question){
  const calculation=supportedCalculation(question);
  if(!calculation)return null;

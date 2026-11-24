@@ -1,10 +1,11 @@
 import {expect,it,vi} from 'vitest';
 import {handle} from './engine.mjs';
-import {gradeChoice,gradeVerifiedCalculation,parseReviewGrade} from './quiz-evaluation.mjs';
+import {gradeChoice,gradeVerifiedCalculation,parseReviewGrade,recallFact} from './quiz-evaluation.mjs';
 
 const scheduling='Using FCFS, calculate the average waiting time in milliseconds.\nProcess | Arrival | Burst\nP1 | 0 | 4\nP2 | 1 | 2\nP3 | 2 | 3';
 const rubric='Deadlock occurs when processes cannot proceed because each waits for a resource held by another.';
-const payload={task:'grade',questionId:'deadlock',question:'What is deadlock?',rubric:[rubric],evidence:[rubric],
+const fact=recallFact(rubric);
+const payload={task:'grade',questionId:'deadlock',question:fact.prompt,referenceAnswer:fact.referenceAnswer,rubric:fact.rubric,evidence:fact.evidence,
  studentAnswer:'Processes get stuck waiting for one another’s resources.'};
 const request=body=>new Request('https://app.in-nocent.workers.dev/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
  body:JSON.stringify(body)});
@@ -36,9 +37,13 @@ it('sends only the question, answer and rubric to Gemma and reports structured g
  expect(run).toHaveBeenCalledOnce();
  expect(run.mock.calls[0][1]).toEqual(expect.objectContaining({response_format:{type:'json_object'}}));
  expect(JSON.parse(run.mock.calls[0][1].messages[1].content)).toEqual({question:payload.question,studentAnswer:payload.studentAnswer,
-  rubric:[rubric],evidence:[rubric]});
+  referenceAnswer:rubric,rubric:fact.rubric,evidence:[rubric]});
  const invalid=await handle(request({...payload,rubric:['A statement without evidence.']}),env);
  expect(invalid.status).toBe(422);
+ const vague=await handle(request({...payload,question:'Explain one key idea from Operating Systems.'}),env);
+ expect(vague.status).toBe(422);
+ const noAnswer=await handle(request({...payload,referenceAnswer:undefined}),env);
+ expect(noAnswer.status).toBe(422);
  expect(run).toHaveBeenCalledOnce();
 });
 
@@ -49,4 +54,11 @@ it('rejects malformed grades and exposes an inference error without a verdict',a
  const response=await handle(request(payload),{STUDY_AI_ENABLED:'true',AI:{run:async()=>{throw new Error('unavailable');}}});
  expect(response.status).toBe(502);
  expect(await response.json()).toMatchObject({code:'model_unavailable'});
+});
+
+it('compiles a question and reference together from other subjects without guessing at missing material',()=>{
+ const statement='Photosynthesis converts light energy into chemical energy stored in sugars.';
+ expect(recallFact(statement)).toMatchObject({prompt:'What does photosynthesis convert?',referenceAnswer:statement,rubric:['light energy into chemical energy stored in sugars']});
+ expect(recallFact('Middleware acts as a bridge between an application and a database.')).toMatchObject({prompt:'What role does middleware play between an application and a database?'});
+ expect(recallFact('Photosynthesis is a key idea.')).toBeNull();
 });
