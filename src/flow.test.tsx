@@ -42,6 +42,7 @@ it('teaches a recognized exam subject immediately and caches each learning depth
   vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{
     const request=JSON.parse(init.body);
     requests.push(request);
+    if(request.task==='practiceBatch')return Response.json({questions:[{prompt:'What is a process?'}]});
     if(request.task==='outline')return Response.json({topics:[{title:'Process Management',group:''}]});
     return Response.json({explanation:'A process is a program that is being executed. The kernel manages resources.',sources:[]});
   }));
@@ -71,7 +72,8 @@ it('teaches a recognized exam subject immediately and caches each learning depth
     await act(async()=>button('Study').click());
     expect(host.querySelector('.book-page-number')?.textContent).toContain('Page 2');
     expect(requests.find(request=>request.learningMode==='study')).toMatchObject({topic:'Process Management'});
-    await vi.waitFor(()=>expect(requests.some(request=>request.task==='practiceBatch')).toBe(true));
+    expect(requests.some(request=>request.task==='practiceBatch')).toBe(false);
+    await act(async()=>button('More Questions ↓').click());
     expect(requests.find(request=>request.task==='practiceBatch')).toMatchObject({topic:'Process Management'});
     await act(async()=>button('Last Minute').click());
     expect(requests.filter(request=>request.task==='notes')).toHaveLength(3);
@@ -85,16 +87,16 @@ it('teaches a recognized exam subject immediately and caches each learning depth
   }
 });
 
-it('uses only the displayed notes for recall and retains original historical question evidence in the quiz',()=>{
+it('requires evidence for recall and retains original historical question evidence in the quiz',()=>{
   const question={...fixture[11],topic:'Deadlock',historical:true};
   const page=bookOutline({questions:[question],warnings:[]},'Operating Systems','',[],[{title:'Deadlock',group:''}]).find(unit=>unit.title==='Deadlock')!;
   const notes='Deadlock occurs when processes wait indefinitely for resources held by one another.';
-  const recall=reviewItems(page,notes,false);
+  const recall=reviewItems(page,{text:notes,references:[]},false);
   expect(recall).toHaveLength(1);
-  expect(recall[0]).toMatchObject({answer:'Deadlock',explanation:notes});
-  expect(recall[0]).not.toHaveProperty('sources');
-  const quiz=reviewItems(page,notes,true);
-  expect(quiz[0]).toMatchObject({prompt:question.prompt,sources:[question.source]});
+  expect(recall[0]).toMatchObject({rule:{kind:'unverified'}});
+  const quiz=reviewItems(page,{text:notes,references:[{...question.source,kind:'uploaded',id:'N1',excerpt:notes,documentType:'Notes'}]},true);
+  expect(quiz[0]).toMatchObject({prompt:'What is deadlock?',rule:{kind:'descriptive',rubric:[notes]}});
+  expect(quiz.find(item=>item.historical)).toMatchObject({prompt:question.prompt,sources:[question.source]});
 });
 
 it('does not use ranked question fragments as navigation titles even without a syllabus',()=>{

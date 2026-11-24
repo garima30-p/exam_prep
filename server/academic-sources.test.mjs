@@ -63,7 +63,7 @@ it('falls back explicitly without inventing a source when web retrieval is unava
   webSearch:{attempted:false,code:'web_not_configured'}});
 });
  
-it('fills a short practice batch once and excludes previously returned questions',async()=>{
+it('returns a short validated batch and excludes it when more questions are requested',async()=>{
  const first='Explain how a cycle in a wait-for graph indicates database deadlock.';
  const duplicate='Explain how a cycle in a wait-for graph indicates database deadlock.';
  const second='Compare the wait-die and wound-wait deadlock prevention policies.';
@@ -73,7 +73,11 @@ it('fills a short practice batch once and excludes previously returned questions
  const response=await handle(post({task:'practiceBatch',subject:'DBMS',topic:'Deadlocks',count:5,
   academicGrounding:true}),{STUDY_AI_ENABLED:'true',AI:{run}});
  expect(response.status).toBe(200);
- expect((await response.json()).questions).toEqual([{prompt:first},{prompt:second}]);
+ expect((await response.json()).questions).toEqual([{prompt:first}]);
+ expect(run).toHaveBeenCalledTimes(1);
+ const more=await handle(post({task:'practiceBatch',subject:'DBMS',topic:'Deadlocks',count:5,exclude:[first],academicGrounding:true}),
+  {STUDY_AI_ENABLED:'true',AI:{run}});
+ expect((await more.json()).questions).toEqual([{prompt:second}]);
  expect(run).toHaveBeenCalledTimes(2);
  expect(JSON.parse(run.mock.calls[1][1].messages[1].content).exclude).toContain(first);
 });

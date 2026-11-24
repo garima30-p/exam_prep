@@ -1,3 +1,4 @@
+import {academicSearchIntent} from './search-intent.mjs';
 import { now, elapsed, serverTiming } from './performance.mjs';
 import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, diagnoseSearchQuota, diagnoseTavily, generateStudyReply, webSearchStatus } from './study-ai.mjs';
 import { administrativeLine, parseSyllabus, syllabusAdministrative, syllabusUnit } from './study-material.mjs';
@@ -258,7 +259,6 @@ export async function handle(request,env) {
   }
   if (path==='/api/health' && request.method==='GET') return json({status:'ok'});
   if (path!=='/api/analyze' && path!=='/api/coach') return json({error:'Endpoint not found.'},404);
-  if (path==='/api/coach'&&!coachEnabled(env))return json({error:aiErrors[aiStatus(env)],code:aiStatus(env)},503);
   if (request.method!=='POST') return json({error:'Use POST.'},405);
   if (request.headers.get('origin') && request.headers.get('origin')!==new URL(request.url).origin) return json({error:'Origin denied.'},403);
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return json({error:'JSON required.'},415);
@@ -281,6 +281,8 @@ export async function handle(request,env) {
     const input=JSON.parse(raw);
     if(path==='/api/coach'){
       if(!input||typeof input!=='object')return json({error:'Invalid AI request.',code:'invalid_request'},400);
+      const search=input.task==='search'||['chat','coach'].includes(input.task)&&!['notes','web'].includes(input.mode)&&academicSearchIntent(input.request);
+      if(!search&&!coachEnabled(env))return json({error:aiErrors[aiStatus(env)],code:aiStatus(env)},503);
       try{return finish(await generateStudyReply(input,env,request,metrics));}
       catch{return json({error:aiErrors.request_failed,code:'request_failed'},502);}
     }

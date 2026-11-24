@@ -451,3 +451,14 @@ dialog::backdrop{background:var(--backdrop)}
 :root[data-theme^="anime-"] [data-topic-priority="lower"]{--topic-priority:#c8bccc}
 .topic-map button[data-topic-priority],.study-drawer li button[data-topic-priority]{color:var(--topic-priority)}
 .topic-map [aria-current]{background:var(--subtle);border-radius:.4rem;padding-inline:.45rem}
+.learning-quiz fieldset{margin:.5rem 0;min-width:0}
+.learning-quiz legend{font-weight:600;margin-bottom:.45rem}
+.learning-quiz .quiz-choice{display:block;padding:.18rem 0}
+.learning-quiz .quiz-choice input{display:inline;width:auto;margin-inline-end:.2rem;accent-color:var(--accent)}
+.quiz-actions{display:flex;align-items:center;flex-wrap:wrap;gap:.65rem}
+.quiz-feedback{border-inline-start:3px solid var(--line)}
+.quiz-feedback p,.quiz-feedback ul{margin:.35rem 0}
+.quiz-feedback.quiz-correct{border-inline-start-color:#299365}
+.quiz-feedback.quiz-partial{border-inline-start-color:#c29a25}
+.quiz-feedback.quiz-incorrect{border-inline-start-color:#d55b60}
+.quiz-expected{white-space:pre-line}

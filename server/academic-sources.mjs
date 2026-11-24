@@ -160,15 +160,20 @@ export function academicOutline(sources){
  })).slice(0,24);
 }
 const synchronizationUrl='https://www.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/5_Synchronization.html';
-let synchronizationPage;
-let synchronizationRequest;
+const deadlockUrl='https://www.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/7_Deadlocks.html';
+const conceptualPages=new Map();
+const conceptualRequests=new Map();
 
 export async function conceptualReferences(subject,topic){
- if(studySubject(subject)!=='operating systems'||!/\b(?:process synchronization|critical section|mutual exclusion|bounded waiting|semaphores?|race conditions?|mutex)\b/i.test(topic))return [];
- if(!synchronizationPage||synchronizationPage.until<Date.now()){
-  synchronizationRequest??=(async()=>{
+ if(studySubject(subject)!=='operating systems')return [];
+ const deadlock=/\bdeadlocks?\b/i.test(topic);
+ if(!deadlock&&!/\b(?:process synchronization|critical section|mutual exclusion|bounded waiting|semaphores?|race conditions?|mutex)\b/i.test(topic))return [];
+ const url=deadlock?deadlockUrl:synchronizationUrl;
+ const cached=conceptualPages.get(url);
+ if(!cached||cached.until<Date.now()){
+  if(!conceptualRequests.has(url))conceptualRequests.set(url,(async()=>{
    try{
-    const response=await fetch(synchronizationUrl,{redirect:'error',signal:AbortSignal.timeout(3500)});
+    const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(3500)});
     if(!response.ok||!response.headers.get('content-type')?.includes('html')||!response.body)return;
     const reader=response.body.getReader();
     const decoder=new TextDecoder();
@@ -182,30 +187,32 @@ export async function conceptualReferences(subject,topic){
      }
     }finally{await reader.cancel().catch(()=>{});}
     const heading=decode(html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]??'');
-    if(!/^Process Synchronization$/i.test(heading))return;
+    if(!new RegExp(deadlock?'^Deadlocks?$':'^Process Synchronization$','i').test(heading))return;
     const passages=[...html.matchAll(/<(?:p|li)\b[^>]*>((?:(?!<(?:p|li|ul|ol|h[1-6])\b)[\s\S]){60,950}?)<\/(?:p|li)>/gi)]
      .map(match=>decode(match[1])).filter(text=>text.length>=65);
-    if(passages.length)synchronizationPage={passages,title:heading,until:Date.now()+3600000};
+    if(passages.length)conceptualPages.set(url,{passages,title:heading,until:Date.now()+3600000});
    }catch{/* A failed fetch does not create a reference. */}
-   finally{synchronizationRequest=null;}
-  })();
-  await synchronizationRequest;
+   finally{conceptualRequests.delete(url);}
+  })());
+  await conceptualRequests.get(url);
  }
- if(!synchronizationPage)return [];
+ const page=conceptualPages.get(url);
+ if(!page)return [];
  const focus=[...terms(topic)].filter(word=>!academicTerms.has(word));
- const core=['critical section','mutual exclusion','bounded waiting','race condition','semaphore'];
+ const core=deadlock?['deadlock','circular wait','another process']:['critical section','mutual exclusion','bounded waiting','race condition','semaphore'];
  const requested=focus.filter(word=>!['operating','systems','process','synchronization'].includes(word));
- const ranked=synchronizationPage.passages.map(text=>{
+ const ranked=page.passages.map(text=>{
   const lower=text.toLowerCase();
   const score=requested.filter(word=>lower.includes(word)).length*4+core.filter(word=>lower.includes(word)).length;
   return {text,score};
  }).filter(item=>item.score>0).sort((a,b)=>b.score-a.score);
- const essential=topic.toLowerCase()==='process synchronization'?[
+ const essential=deadlock?[ranked.find(item=>/^A set of processes is deadlocked\b/i.test(item.text))?.text].filter(Boolean):
+  topic.toLowerCase()==='process synchronization'?[
   ranked.find(item=>/^mutual exclusion\b/i.test(item.text))?.text,
   ranked.find(item=>/\brace condition\b/i.test(item.text)&&item.text.length<=580)?.text,
  ].filter(Boolean):[];
  const passages=[...new Set([...essential,...ranked.map(item=>item.text)].filter(text=>text.length<=580))].slice(0,4);
  if(!passages.length)return [];
- return [{kind:'web',url:synchronizationUrl,title:synchronizationPage.title,publisher:'University of Illinois Chicago',
+ return [{kind:'web',url,title:page.title,publisher:'University of Illinois Chicago',
   category:'academic-reference',status:'page-inspected',role:'conceptual',retrievedBy:'direct',excerpt:passages.join('\n\n')}];
 }

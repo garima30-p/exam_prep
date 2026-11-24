@@ -1,4 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
+import {browserTiming,now} from '../server/performance.mjs';
 import type {Source} from './api';
 import type {BookPage} from './study-book';
 import {publicStudyConcepts} from '../server/coach-topics.mjs';
@@ -7,6 +8,7 @@ export type WebEvidence={kind:'web';id:string;title:string;url:string;publisher?
   excerpt?:string;retrievedBy?:'tavily'|'direct';supportingQuote?:string;supportingQuotes?:string[];status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[];scopeOutline?:{title:string;group:string;excerpt:string}[]};
 export type LearningSource=(Source & {kind:'uploaded';id:string;supportingQuotes?:string[]})|WebEvidence;
 export type AnswerVerification={
+  searchResult?:boolean;
   evidenceStatus?:'source_backed'|'partially_source_backed'|'no_supporting_source';
   validationStatus?:'deterministically_checked'|'reviewed_against_references'|'not_independently_checked'|'check_failed';
   validationMethod?:string;
@@ -19,7 +21,7 @@ export type AcademicResult={sources:WebEvidence[];scope:{requested:boolean;insti
 export type PracticeItem={id:string;prompt:string;sources?:readonly Source[];officialSource?:WebEvidence;answerSource?:Source|null;answer?:string};
 type Explanation={text:string;sources:LearningSource[];generated:boolean;verification:AnswerVerification};
 type Detail={value?:Explanation;pending?:boolean;error?:string};
-type Batch={items:PracticeItem[];pending?:boolean;error?:string;requested?:boolean;curriculum?:WebEvidence[]};
+type Batch={items:PracticeItem[];pending?:boolean;error?:string;curriculum?:WebEvidence[]};
 export type PracticeTopic={key:string;subject:string;page:BookPage;university:string;official:WebEvidence[]};
 const emptyBatch:Batch={items:[]};
 const keyText=(text:string)=>text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
@@ -60,12 +62,13 @@ export function usePractice(){
     setBatches({});setDetails({});setViews({});
   }
 
-  async function add(topic:PracticeTopic,count=6,format='',initial=false){
+  async function add(topic:PracticeTopic,count=6,format=''){
+    const started=now();
     const key='batch:'+topic.key, old=batches[topic.key]??emptyBatch;
-    if(requests.current.has(key)||old.items.length>=60||(initial&&old.requested))return;
+    if(requests.current.has(key)||old.items.length>=60)return;
     const operation=new AbortController();
     requests.current.set(key,operation);
-    setBatches(current=>({...current,[topic.key]:{...old,pending:true,error:undefined,requested:true}}));
+    setBatches(current=>({...current,[topic.key]:{...old,pending:true,error:undefined}}));
     try{
       let prompts:{prompt:string;answer?:string}[];
       let curriculum:WebEvidence[]|undefined;
@@ -88,9 +91,12 @@ export function usePractice(){
         return [{id:'practice-'+normalized,prompt,answer:item.answer}];
       });
       if(!added.length)throw new Error('No new questions were returned. Try again.');
-      if(!operation.signal.aborted)setBatches(current=>({...current,[topic.key]:{items:[...old.items,...added].slice(0,60),requested:true,curriculum}}));
+      if(!operation.signal.aborted){
+        setBatches(current=>({...current,[topic.key]:{items:[...old.items,...added].slice(0,60),curriculum}}));
+        requestAnimationFrame(()=>browserTiming('study:practice-generation',started));
+      }
     }catch(error){
-      if(!operation.signal.aborted)setBatches(current=>({...current,[topic.key]:{...old,pending:false,requested:true,
+      if(!operation.signal.aborted)setBatches(current=>({...current,[topic.key]:{...old,pending:false,
         error:error instanceof Error&&error.name==='Error'?error.message:'Practice questions could not load. Try again.'}}));
     }finally{if(requests.current.get(key)===operation)requests.current.delete(key);}
   }

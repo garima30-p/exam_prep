@@ -1,3 +1,4 @@
+import {academicSearchIntent} from '../server/search-intent.mjs';
 import type {AnswerVerification} from './practice';
 import {academicOutline} from '../server/academic-sources.mjs';
 import type {TopicOutline} from './study-book';
@@ -91,12 +92,7 @@ function webSearchLabel(search:AnswerVerification['webSearch'],webCount:number){
   if(!search)return null;
   switch(search.code){
     case 'ok': return webCount?'Academic web evidence is listed below.':'Web results were retrieved, but none support this answer.';
-    case 'web_usage_limit': {
-      const limits=search.quota?.blockedBy??[];
-      const scope=limits.includes('guest_daily')&&limits.includes('global_daily')?'Guest and shared':
-        limits.includes('guest_daily')?'Guest':limits.includes('global_daily')?'Shared':'Daily';
-      return scope+' web-search limit reached. Tavily was not contacted.';
-    }
+    case 'web_usage_limit': return 'Web search limit reached for today.';
     case 'web_no_results': return search.providerResultCount?'Search results contained no relevant academic passages.':'No relevant web results were found.';
     case 'web_not_configured':
     case 'web_quota_unavailable': return 'Academic web search is unavailable.';
@@ -115,14 +111,14 @@ function SourceStatus({references,openSource,generated=true,verification,scope}:
   const validation=verification?.validationStatus;
   const web=references.filter(reference=>reference.kind==='web');
   const uploads=references.filter(reference=>reference.kind==='uploaded');
-  const searchStatus=webSearchLabel(verification?.webSearch,web.length);
+  const searchStatus=verification?.searchResult?null:webSearchLabel(verification?.webSearch,web.length);
   const scopeIsListed=scope&&uploads.some(reference=>
     reference.documentIndex===scope.documentIndex&&reference.page===scope.page&&reference.excerpt===scope.excerpt);
   if(!generated&&!references.length&&!validation&&!scope&&!searchStatus)return null;
   const showQuotes=(reference:CoachSource)=>(reference.supportingQuotes??[reference.supportingQuote||reference.excerpt]).filter(Boolean)
     .map((quote,index)=><blockquote key={index}>{quote}</blockquote>);
   return <div className="source-status">
-    <details>
+    <details open={verification?.searchResult||undefined}>
       <summary>{references.length||scope?'Sources ↗':'Source details'}</summary>
       {evidence?<small>{evidenceLabels[evidence]}</small>:generated&&!references.length?<small>No supporting source available</small>:null}
       {validation&&<small>{validationLabels[validation]}{verification?.validationMethod?' · '+verification.validationMethod:''}
@@ -146,7 +142,7 @@ function SourceStatus({references,openSource,generated=true,verification,scope}:
         <ul className="source-references">{web.map(reference=><li key={reference.id}>
           <a className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>
           <small className="source-url">{reference.url}</small>
-          <small>{[reference.publisher,reference.retrievedBy==='direct'?'Directly inspected':null].filter(Boolean).join(' · ')}</small>
+          <small>{[reference.category==='official-pyq'?'Official previous-year paper':reference.category==='official-syllabus'?'Official syllabus':null,reference.publisher].filter(Boolean).join(' · ')}</small>
           {showQuotes(reference)}
         </li>)}</ul>
       </>}
@@ -326,16 +322,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     return {key:JSON.stringify([book.id,page.id]),subject:book.subject,page,university:book.university,official:academic?.sources??[]};
   }
   const activePractice=activeBookPage?practiceTopic(activeBookPage):null;
+  const selectedQuestion=activeBookPage?selectedQuestions[activeBookPage.id]:undefined;
+  const lessonKey=activePractice?mode+':'+activePractice.key:'';
+  const activeBookContent=bookContent[lessonKey];
   useEffect(()=>{
-    if(!book||academicRequests.current.has(book.id)||(!book.university&&book.subject!=='Operating Systems'))return;
+    if(!activeBookContent||!book||academicRequests.current.has(book.id)||(!book.university&&book.subject!=='Operating Systems'))return;
     academicRequests.current.add(book.id);
     void fetchAcademic(book.subject,book.university,AbortSignal.timeout(12000))
       .then(data=>setAcademicByScope(current=>({...current,[book.id]:data})))
       .catch(()=>setAcademicByScope(current=>({...current,[book.id]:null})));
-  },[book]);
-  const selectedQuestion=activeBookPage?selectedQuestions[activeBookPage.id]:undefined;
-  const lessonKey=activePractice?mode+':'+activePractice.key:'';
-  const activeBookContent=bookContent[lessonKey];
+  },[book,activeBookContent]);
   useEffect(()=>{
     if(!activeBookContent)return;
     const renderStarted=now();
@@ -359,13 +355,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     painted();
     return ()=>{observer.disconnect();cancelAnimationFrame(frame);};
   },[activeBookContent,mode]);
-  useEffect(()=>{
-    if(mode!=='study'||!activePractice||(!activeBookContent&&!bookErrors[lessonKey]))return;
-    const frame=requestAnimationFrame(()=>{
-      if(!practice.batches[activePractice.key]?.requested)void practice.add(activePractice,5,'',true);
-    });
-    return ()=>cancelAnimationFrame(frame);
-  },[mode,activePractice,activeBookContent,practice,bookErrors,lessonKey]);
   useEffect(()=>{
     if(!activeBookPage)return;
     studyHeading.current?.focus({preventScroll:true});
@@ -551,7 +540,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const scopeKey=(subject:string)=>JSON.stringify([subjectKey(subject),university.toLowerCase().trim()]);
       const knownScope=provisionalSubject?scopeKey(provisionalSubject):'';
       const loadCourse=(subject:string)=>fetchAcademic(subject,university,AbortSignal.any([run.signal,AbortSignal.timeout(9500)])).catch(()=>null);
-      const pendingCourse=mode==='study'&&university&&knownScope&&academicByScope[knownScope]===undefined?loadCourse(provisionalSubject):null;
+      const pendingCourse=mode==='study'&&university&&knownScope&&!inspected.outline.length&&academicByScope[knownScope]===undefined?loadCourse(provisionalSubject):null;
       const key=JSON.stringify([studySessionPrompt(inputPrompt),inspected.files.map(file=>[file.id,file.kind]),records]);
       let analysis=analyzed.current.get(key)??null;
       let refinement:Promise<Analysis>|undefined;
@@ -580,7 +569,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       if(!subject){requestSubject();return;}
       const bookId=scopeKey(subject);
       let course=academicByScope[bookId];
-      if(mode==='study'&&university&&course===undefined){
+      if(mode==='study'&&university&&course===undefined&&!inspected.outline.length){
         setProcessingMessage('Checking the university curriculum…');
         course=await ((bookId===knownScope?pendingCourse:null)??loadCourse(subject));
         run.signal.throwIfAborted();
@@ -748,7 +737,15 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
     setMessages(current=>current.map(item=>item===message?{...reply,pending:false}:item));
   }
-  function send(value:string,channel:'main'|'coach'='main') {
+  function searchPrompt(text:string,channel:'main'|'coach'){
+    if(academicSearchIntent(text))return text;
+    if(!text||text.length>140)return '';
+    const turns=messages.filter(message=>Boolean(message.inline)===(channel==='main'));
+    const last=turns.at(-1),previous=turns.at(-2);
+    return last?.verification?.searchResult&&/^(?:Which (?:university|subject|study topic)|What is the university)/.test(last.text)&&previous?.role==='You'
+      ?previous.text+'\n'+text:'';
+  }
+  function send(value:string,channel:'main'|'coach'='main',searchSubject?:string) {
     const text=value.trim();
     if(!text||controller.current||activeAssistantRequest.current)return;
     const suppliedMinutes=duration(text);
@@ -768,6 +765,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     else {coachAtBottom.current=true;setCoachDraft('');}
     setMessages(current=>[...current,{role:'You',text,inline},message]);
     if(offer)return;
+    const requestedSearch=searchPrompt(text,channel);
+    if(requestedSearch){
+      const uploadedPapers=(book?.pages.flatMap(page=>page.questions)??[])
+        .filter(question=>question.historical&&question.source.documentIndex!==undefined)
+        .map(question=>({...question.source,documentType:'Past paper'}));
+      const sources=[...new Map(uploadedPapers.map(source=>[source.documentIndex,source])).values()].slice(0,4);
+      void askAssistant(message,{request:requestedSearch,task:'search',mode:'auto',subject:searchSubject||book?.subject||context.subject,
+        topic:activeBookPage?.title,topics:[],preparationMode:mode,university:book?.university,history:[],sources,minutes:0});
+      return;
+    }
 
     const conversation=messages.filter(item=>Boolean(item.inline)===inline);
     const subject=book?.subject||context.subject||learningSubject(text);
@@ -775,7 +782,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const numbered=text.match(/(?:#|question\s+)(\d+)/i);
     const selected=numbered?activeBookPage?.questions[Number(numbered[1])-1]:undefined;
     const previousQuestion=conversation.filter(item=>item.role==='You').at(-1)?.text??'';
-    const query=new Set((text+' '+previousQuestion+' '+(selected?.topic??'')+' '+topics.join(' ')).toLowerCase().match(/[a-z]{4,}/g)??[]);
+    const followup=/\b(?:it|that|this|above|previous|again|the (?:steps|formula|example))\b/i.test(text);
+    const query=new Set((text+' '+(followup?previousQuestion:'')+' '+(selected?.topic??'')).toLowerCase().match(/[a-z]{4,}/g)??[]);
     const retrieved=documents.flatMap(document=>{
       if(draftAttachmentIds.includes(document.id)||(evidenceIds.current&&!evidenceIds.current.has(document.id)))return [];
       const kind=files.find(file=>file.id===document.id)?.kind;
@@ -824,9 +832,32 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     selectPractice(item);
     discuss({title:activeBookPage.title,text:item.prompt,sources:item.answerSource?[item.answerSource]:activeBookPage.passages,question:item});
   }
+  async function searchWithAttachments(text:string){
+    const run=new AbortController();
+    controller.current=run;
+    setBusy(true);setProcessingMessage('Reading attachments…');setNotice('');
+    clearComposer();
+    let subject='';
+    try{
+      const records=await readDocuments(run);
+      const inspected=inspectStudyInput(records,files);
+      setFiles(inspected.files);
+      subject=inspected.subject;
+    }catch{
+      if(run.signal.aborted){setNotice('Reading cancelled. Send again to resume.');return;}
+    }finally{
+      controller.current=null;setBusy(false);setProcessingMessage('');
+    }
+    send(text,'main',subject);
+  }
   function submitMessage(){
     if(controller.current||activeAssistantRequest.current)return;
     const text=draft.trim();
+    if(searchPrompt(text,'main')){
+      if(newAttachments)void searchWithAttachments(text);
+      else send(text);
+      return;
+    }
     if(needsSubject&&!newAttachments&&text&&!text.includes('?')&&text.length<=100){
       const adjusted={...context,subject:activeApi.parse(text).subject||text};
       clearComposer();
@@ -922,16 +953,19 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   function openQuiz(){
     if(!book||!activeBookContent)return;
+    const started=now();
     rememberTopic();
-    const items=book.pages.flatMap(page=>{
-      if(!studied[page.id]&&page!==activeBookPage)return [];
+    const eligible=[activeBookPage,...book.pages.filter(page=>page!==activeBookPage&&studied[page.id])];
+    const items=eligible.flatMap(page=>{
+      if(!page)return [];
       const key=practiceTopic(page)?.key;
       const content=bookContent[mode+':'+key]??bookContent['study:'+key]??bookContent['last-minute:'+key];
-      return content?reviewItems(page,content.text,true):[];
-    });
-    const key=JSON.stringify([activeBookPage?.id,...items.map(item=>item.id)]);
-    if(quiz?.key!==key)setQuiz({key,items:[...items.filter(item=>item.sources).slice(0,2),...items.filter(item=>!item.sources).slice(0,4)]});
+      return content?reviewItems(page,content,true,key?practice.batches[key]?.items:undefined):[];
+    }).slice(0,8);
+    const key=JSON.stringify([book.id,activeBookPage?.id]);
+    setQuiz({key,items});
     quizDialog.current?.showModal();
+    requestAnimationFrame(()=>browserTiming('study:quiz-generation',started));
   }
   const workspaceResult=Boolean(book&&activeBookPage);
   const reviewDocuments=documents.filter(document=>!documentComplete(document));
@@ -1041,7 +1075,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 {mode==='last-minute'&&recallPage!==lessonKey&&<div className="lesson-actions"><button type="button" className="link accent"
                   onClick={()=>{rememberTopic();setRecallPage(lessonKey);}}>Quick Recall</button></div>}
                 {mode==='last-minute'&&recallPage===lessonKey&&<section aria-label="Quick Recall" className="quick-recall">
-                  <ReviewForm key={lessonKey} items={reviewItems(activeBookPage,activeBookContent.text,false)} openSource={reference=>open(null,reference)}/>
+                  <ReviewForm key={lessonKey} items={reviewItems(activeBookPage,activeBookContent,false)} attempt={quizAttempts[lessonKey]}
+                    onAttempt={update=>setQuizAttempts(current=>({...current,[lessonKey]:update(current[lessonKey]??{})}))} openSource={reference=>open(null,reference)}/>
                   <button type="button" className="link" onClick={()=>setRecallPage(null)}>Back to notes</button>
                 </section>}
               </div>:bookErrors[lessonKey]?<>
@@ -1153,8 +1188,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       <div className="info-heading"><h2 id="quiz-title">Quiz</h2>
         <form method="dialog"><button className="icon-btn" aria-label="Close quiz"><Icon name="close"/></button></form>
       </div>
-      {quiz&&<ReviewForm key={quiz.key} items={quiz.items} subject={book?.subject}
-        attempt={quizAttempts[quiz.key]} onAttempt={attempt=>setQuizAttempts(current=>({...current,[quiz.key]:attempt}))}
+      {quiz&&<ReviewForm key={quiz.key} items={quiz.items}
+        attempt={quizAttempts[quiz.key]} onAttempt={update=>setQuizAttempts(current=>({...current,[quiz.key]:update(current[quiz.key]??{})}))}
         revisit={title=>{
           const index=book?.pages.findIndex(page=>page.title===title)??-1;
           if(index>=0){quizDialog.current?.close();selectMode('study');openBookPage(index);}

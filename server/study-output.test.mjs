@@ -114,7 +114,7 @@ it('still reports provider usage limits',async()=>{
   run.mockRejectedValueOnce(Object.assign(new Error('Provider usage limit'),{status:429}));
   const response=await handle(post('coach',{request:'Explain deadlock'}),env);
   expect(response.status).toBe(429);
-  expect(await response.json()).toMatchObject({code:'usage_limit',error:expect.stringContaining('Cloudflare Workers AI')});
+  expect(await response.json()).toMatchObject({code:'usage_limit',error:expect.stringContaining('study assistance limit')});
 });
 
 it('never treats reasoning-only output as an answer and accepts a populated provider text fallback',async()=>{
