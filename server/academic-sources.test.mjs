@@ -55,9 +55,9 @@ it('returns the exact source link and supporting quote only after citation valid
 });
 
 it('falls back explicitly without inventing a source when web retrieval is unavailable',async()=>{
- const run=vi.fn(async()=>({response:'A deadlock is a circular wait among transactions for locks.'}));
- const response=await handle(post({task:'notes',mode:'auto',subject:'DBMS',topic:'deadlock',topics:['deadlock'],
-  request:'Explain database deadlock',academicGrounding:true}),{STUDY_AI_ENABLED:'true',AI:{run}});
+ const run=vi.fn(async()=>({response:'Serializability means matching the outcome of a serial schedule.'}));
+ const response=await handle(post({task:'notes',mode:'auto',subject:'DBMS',topic:'serializability',topics:['serializability'],
+  request:'Explain serializability',academicGrounding:true}),{STUDY_AI_ENABLED:'true',AI:{run}});
  expect(response.status).toBe(200);
  expect(await response.json()).toMatchObject({sourceVerified:false,evidenceSupplied:0,citationCount:0,sources:[],
   webSearch:{attempted:false,code:'web_not_configured'}});
@@ -68,7 +68,7 @@ it('fills a short practice batch once and excludes previously returned questions
  const duplicate='Explain how a cycle in a wait-for graph indicates database deadlock.';
  const second='Compare the wait-die and wound-wait deadlock prevention policies.';
  const run=vi.fn()
-  .mockResolvedValueOnce({response:{questions:[{question:first}]}})
+  .mockResolvedValueOnce({response:{questions:[{question:first},{question:'Explain how photosynthesis converts light into chemical energy.'},{question:'Calculate the average waiting time from the table below.'}]}})
   .mockResolvedValueOnce({response:{questions:[{question:duplicate},{question:second}]}});
  const response=await handle(post({task:'practiceBatch',subject:'DBMS',topic:'Deadlocks',count:5,
   academicGrounding:true}),{STUDY_AI_ENABLED:'true',AI:{run}});

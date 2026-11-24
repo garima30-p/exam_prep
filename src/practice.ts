@@ -3,13 +3,19 @@ import type {Source} from './api';
 import type {BookPage} from './study-book';
 
 export type WebEvidence={kind:'web';id:string;title:string;url:string;publisher?:string;category?:'official-syllabus'|'official-pyq'|'academic-reference';
-  excerpt?:string;supportingQuote?:string;status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[];scopeOutline?:{title:string;group:string;excerpt:string}[]};
-export type LearningSource=(Source & {kind:'uploaded';id:string})|WebEvidence;
+  excerpt?:string;supportingQuote?:string;supportingQuotes?:string[];status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[];scopeOutline?:{title:string;group:string;excerpt:string}[]};
+export type LearningSource=(Source & {kind:'uploaded';id:string;supportingQuotes?:string[]})|WebEvidence;
+export type AnswerVerification={
+  evidenceStatus?:'source_backed'|'partially_source_backed'|'no_supporting_source';
+  validationStatus?:'deterministically_checked'|'reviewed_against_references'|'not_independently_checked'|'check_failed';
+  validationMethod?:string;
+  checkedMetrics?:string[];
+};
 export type AcademicResult={sources:WebEvidence[];scope:{requested:boolean;institution?:string;officialSyllabus:boolean;officialPyq:boolean};
   officialSearch?:{code:string;providerStatus?:number|null;cached?:boolean;attempted?:boolean}|null;webSearch?:{code:string}|null};
 
 export type PracticeItem={id:string;prompt:string;sources?:readonly Source[];officialSource?:WebEvidence;answerSource?:Source|null;answer?:string};
-type Explanation={text:string;sources:LearningSource[];generated:boolean};
+type Explanation={text:string;sources:LearningSource[];generated:boolean;verification:AnswerVerification};
 type Detail={value?:Explanation;pending?:boolean;error?:string};
 type Batch={items:PracticeItem[];pending?:boolean;error?:string;requested?:boolean;curriculum?:WebEvidence[]};
 export type PracticeTopic={key:string;subject:string;page:BookPage;university:string;official:WebEvidence[]};
@@ -95,13 +101,13 @@ export function usePractice(){
           body:JSON.stringify({task,mode:'auto',academicGrounding:true,university:topic.university,practiceExample:task==='example',topic:topic.page.title,subject:topic.subject,
             request:task==='example'?'Show one solved example of '+topic.page.title+'.':item?.prompt,
             activeQuestion:item?.prompt,hintNumber,sources:item?.answerSource?[item.answerSource]:topic.page.passages})});
-        const data=await response.json() as {explanation?:string;sources?:LearningSource[];generated?:boolean};
-        if(!response.ok||!data.explanation?.trim())throw new Error('This explanation could not load.');
-        value={text:data.explanation,sources:data.sources??[],generated:data.generated!==false};
+        const data=await response.json() as ({explanation?:string;sources?:LearningSource[];generated?:boolean;error?:string}&AnswerVerification);
+        if(!response.ok||!data.explanation?.trim())throw new Error(data.error||'This explanation could not load. Try again.');
+        value={text:data.explanation,sources:data.sources??[],generated:data.generated!==false,verification:data};
       }
       if(!operation.signal.aborted)setDetails(current=>({...current,[key]:{value}}));
-    }catch{
-      if(!operation.signal.aborted)setDetails(current=>({...current,[key]:{error:'This explanation could not load. Try again.'}}));
+    }catch(error){
+      if(!operation.signal.aborted)setDetails(current=>({...current,[key]:{error:error instanceof Error&&error.name==='Error'?error.message:'This explanation could not load. Try again.'}}));
     }finally{if(requests.current.get(key)===operation)requests.current.delete(key);}
   }
   return {batches,details,add,load,detailKey,reset};

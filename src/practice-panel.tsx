@@ -2,12 +2,12 @@ import {useState} from 'react';
 import type {ReactNode} from 'react';
 import type {Source} from './api';
 import {historicalQuestions} from './practice';
-import type {LearningSource,PracticeItem,PracticeTopic,usePractice} from './practice';
+import type {AnswerVerification,LearningSource,PracticeItem,PracticeTopic,usePractice} from './practice';
 import {sourceLabel} from './study-pack';
 
 type Practice=ReturnType<typeof usePractice>;
 type Shared={topic:PracticeTopic;practice:Practice;renderText:(text:string)=>ReactNode;
-  renderSources:(sources:readonly LearningSource[],generated:boolean)=>ReactNode};
+  renderSources:(sources:readonly LearningSource[],generated:boolean,verification?:AnswerVerification)=>ReactNode};
 type Props=Shared&{selected?:string;openSource:(source:Source)=>void;askCoach:(item:PracticeItem)=>void;selectQuestion:(item:PracticeItem)=>void};
 
 function DetailResult({detail,retry,renderText,renderSources}:{
@@ -16,8 +16,8 @@ function DetailResult({detail,retry,renderText,renderSources}:{
   if(detail?.pending)return <p role="status">Loading explanation…</p>;
   if(detail?.error)return <p role="alert">{detail.error} <button type="button" className="link accent" onClick={retry}>Retry</button></p>;
   if(!detail?.value)return null;
-  const {text,sources,generated}=detail.value;
-  return <>{renderText(text)}{renderSources(sources,generated)}</>;
+  const {text,sources,generated,verification}=detail.value;
+  return <>{renderText(text)}{renderSources(sources,generated,verification)}</>;
 }
 
 export function SolvedExample({topic,practice,renderText,renderSources,askCoach}:Shared&{askCoach?:(text:string)=>void}){

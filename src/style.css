@@ -317,6 +317,7 @@ dialog::backdrop{background:var(--backdrop)}
 .results-questions{margin-top:1.2rem}
 .study-note{padding:0;border:0;background:transparent}
 .source-status{display:flex;flex-wrap:wrap;align-items:baseline;gap:.15rem .6rem;color:var(--muted);font-size:.825rem;margin:.6rem 0}
+.source-status details > small{display:block}
 .source-status summary{color:var(--accent);width:max-content}
 .source-status details{margin:0}
 .source-status details[open]{flex-basis:100%}

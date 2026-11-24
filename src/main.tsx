@@ -1,3 +1,4 @@
+import type {AnswerVerification} from './practice';
 import {academicOutline} from '../server/academic-sources.mjs';
 import type {TopicOutline} from './study-book';
 import type {ReactNode} from 'react';
@@ -34,7 +35,7 @@ const documentKinds=['Unclassified','Syllabus','Past paper','Notes','Administrat
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
 type Page = 'pricing'|'privacy'|'terms';
 type PreparationMode = 'last-minute'|'study';
-type BookContent = {text:string;references:CoachSource[];webLimited:boolean;excerpt?:boolean};
+type BookContent = {text:string;references:CoachSource[];webLimited:boolean;excerpt?:boolean;verification?:AnswerVerification;verificationError?:string};
 type Discussion = {title:string;text:string;sources:readonly Source[];question?:PracticeItem;pageId?:string};
 
 type CoachSource=LearningSource;
@@ -43,7 +44,7 @@ type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subjec
   university?:string;academicGrounding?:boolean;
   history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
 type Message = {role:'You'|'in-nocent';text:string;references?:CoachSource[];inline?:boolean;
-  generated?:boolean;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest;offer?:{topic:PracticeTopic;count:number;format:string}};
+  generated?:boolean;verification?:AnswerVerification;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest;offer?:{topic:PracticeTopic;count:number;format:string}};
 
 // Keep the complete question and newest context within the Worker's byte limit.
 function coachRequestBody(request:CoachRequest) {
@@ -82,14 +83,23 @@ function CoachAnswer({text}:{text:string}) {
   return <Suspense fallback={<p role="status">Loading study content…</p>}><StudyMarkdown text={text}/></Suspense>;
 }
 
-function SourceStatus({references,openSource,generated=true}:{
-  references:readonly CoachSource[];openSource:(source:Source)=>void;generated?:boolean;
+const evidenceLabels={source_backed:'Source-backed',partially_source_backed:'Partially source-backed',no_supporting_source:'No supporting source available'};
+const validationLabels={deterministically_checked:'Deterministically checked',reviewed_against_references:'Reviewed against academic references',
+  not_independently_checked:'Not independently checked',check_failed:'Check failed'};
+
+function SourceStatus({references,openSource,generated=true,verification}:{
+  references:readonly CoachSource[];openSource:(source:Source)=>void;generated?:boolean;verification?:AnswerVerification;
 }) {
-  if(!generated&&!references.length)return null;
+  const evidence=verification?.evidenceStatus;
+  const validation=verification?.validationStatus;
+  if(!generated&&!references.length&&!validation)return null;
   return <div className="source-status">
     {generated&&<small>{references.length?'AI-generated explanation':'AI-generated · Not source-verified'}</small>}
-    {references.length>0&&<details><summary>Sources ↗ ({references.length})</summary>
-      <ul className="source-references">{references.map(reference=><li key={reference.id}>
+    {(references.length>0||validation)&&<details><summary>{references.length?'Sources ↗ ('+references.length+')':'Answer information'}</summary>
+      {evidence&&<small>{evidenceLabels[evidence]}</small>}
+      {validation&&<small>{validationLabels[validation]}{verification?.validationMethod?' · '+verification.validationMethod:''}
+        {verification?.checkedMetrics?.length?' · '+verification.checkedMetrics.join(', '):''}</small>}
+      {references.length>0&&<ul className="source-references">{references.map(reference=><li key={reference.id}>
         {reference.kind==='uploaded'?<>
           <button className="link accent source" onClick={()=>openSource(reference)}>{sourceLabel(reference)}</button>
           <small>{reference.documentType?'Uploaded '+reference.documentType.toLowerCase():'Student-provided material'}
@@ -100,8 +110,9 @@ function SourceStatus({references,openSource,generated=true}:{
             ?'Official university PYQ':'Academic reference',reference.status==='page-inspected'?'Page inspected':reference.status==='provider-page-text'
             ?'Page text supplied by retrieval':reference.status==='provider-excerpt'?'Search excerpt':null].filter(Boolean).join(' · ')}</small>
         </>}
-        {(reference.supportingQuote||reference.excerpt)&&<blockquote>{reference.supportingQuote||reference.excerpt}</blockquote>}
-      </li>)}</ul>
+        {(reference.supportingQuotes??[reference.supportingQuote||reference.excerpt]).filter(Boolean)
+          .map((quote,index)=><blockquote key={index}>{quote}</blockquote>)}
+      </li>)}</ul>}
     </details>}
   </div>;
 }
@@ -331,6 +342,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setLoadingPage(lessonKey);
     const requestedAt=now();
     void (async()=>{
+      let verificationError:string|undefined;
       try{
         const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
           signal:AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]),
@@ -339,20 +351,24 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             syllabusTopics:unit===book.pages[0]?book.pages.filter(page=>page.scope).slice(0,12).map(page=>page.title):undefined,
             request:(unit===book.pages[0]&&book.initialRequest?book.initialRequest+'\n\n':'')+'Teach '+unit.title+' to a beginner. Start with the foundation, explain the essential ideas and relationships, then give a short takeaway.',
             priorities:(unit.priorities??unit.questions).slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages.map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'}))})});
-        const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
+        const data=await response.json() as ({explanation?:string;code?:string;error?:string;sources?:CoachSource[];webSearch?:{code:string}}&AnswerVerification);
         if(!response.ok||!data.explanation?.trim()){
+          if(data.validationStatus==='check_failed'){
+            verificationError=data.error||'This answer failed an academic check.';
+            throw new Error(verificationError);
+          }
           throw new Error(data.code==='usage_limit'?'The AI usage limit has been reached.':data.code==='citation_validation_failed'
             ?'The generated notes could not be source-verified.':'This topic could not be generated.');
         }
         if(!operation.signal.aborted){
-          setBookContent(current=>({...current,[lessonKey]:{text:data.explanation!,references:data.sources??[],webLimited:Boolean(data.webSearch&&data.webSearch.code!=='ok')}}));
+          setBookContent(current=>({...current,[lessonKey]:{text:data.explanation!,references:data.sources??[],verification:data,webLimited:Boolean(!data.sources?.length&&data.webSearch&&data.webSearch.code!=='ok')}}));
           browserTiming('study:lesson-request',requestedAt);
         }
       }catch(error){
         if(operation.signal.aborted)return;
         if(excerpts.length)setBookContent(current=>({...current,[lessonKey]:{text:excerpts.map(source=>source.excerpt).join('\n\n'),
           references:excerpts.map((source,index)=>({...source,kind:'uploaded',id:'excerpt-'+index})),
-          webLimited:false,excerpt:true}}));
+          webLimited:false,excerpt:true,verificationError}}));
         else setBookErrors(current=>({...current,[lessonKey]:error instanceof Error&&error.name==='Error'?error.message:'This topic could not be generated.'}));
       }finally{
         if(bookRequest.current===operation){bookRequest.current=null;setLoadingPage(null);}
@@ -631,9 +647,17 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
   }
   const activeAssistantRequest=useRef<AbortController|null>(null);
+  const checkedSolutions=useRef(new Map<string,Pick<Message,'text'|'generated'|'references'|'verification'>>());
   useEffect(()=>()=>{activeAssistantRequest.current?.abort();},[]);
   async function askAssistant(message:Message,request:CoachRequest) {
     if(activeAssistantRequest.current)return;
+    const cacheKey=!request.sources.length&&!request.activeQuestion&&!request.studyPage
+      ?JSON.stringify([request.task,request.request]):'';
+    const saved=cacheKey?checkedSolutions.current.get(cacheKey):undefined;
+    if(saved){
+      setMessages(current=>current.map(item=>item===message?{...message,...saved,pending:false}:item));
+      return;
+    }
     const operation=new AbortController();
     activeAssistantRequest.current=operation;
     setAssistantPending(true);
@@ -644,7 +668,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const signal=AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]);
       const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
         signal,body:coachRequestBody(request)});
-      type Reply={explanation?:string;generated?:boolean;sources?:CoachSource[];code?:string;error?:string};
+      type Reply={explanation?:string;generated?:boolean;sources?:CoachSource[];code?:string;error?:string}&AnswerVerification;
       let data:Reply={};
       if(response.ok&&response.body&&response.headers.get('content-type')?.startsWith('text/event-stream')){
         let received='';
@@ -662,7 +686,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       if(!response.ok||!data.explanation?.trim()){
         throw new Error(response.status===413?'This message is too long to send. Shorten it and try again.':data.error||'Couldn’t answer right now. Try again.');
       }
-      reply={...message,text:data.explanation,generated:data.generated!==false,references:data.sources};
+      reply={...message,text:data.explanation,generated:data.generated!==false,references:data.sources,verification:data};
+      if(cacheKey&&data.validationStatus==='deterministically_checked'&&!data.sources?.length){
+        if(checkedSolutions.current.size>=16)checkedSolutions.current.delete(checkedSolutions.current.keys().next().value!);
+        checkedSolutions.current.set(cacheKey,{text:reply.text,generated:reply.generated,references:reply.references,verification:data});
+      }
     }catch(error){
       if(operation.signal.aborted)return;
       const errorMessage=error instanceof Error&&error.name==='Error'?error.message:'Couldn’t answer right now. Try again.';
@@ -803,6 +831,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     clearBook();analyzed.current.clear();documentCache.current.clear();activeSubject.current='';evidenceIds.current=null;incomingEvidenceIds.current=[];
     activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
     setResult(null);setWarnings([]);
+    checkedSolutions.current.clear();
     setMessages([]);setCoachDraft('');setCoachOpen(false);setFiles([]);setDocuments([]);setAwaitReview(false);setPrompt('');setDraft('');setContext(empty);
     setNeedsSubject(false);setNotice('');setDiscussion(null);setDraftAttachmentIds([]);setPreviewAttachmentId(null);
   }
@@ -977,9 +1006,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
               {content?<div className="learning-body">
                 <CoachAnswer text={content.text.replace(/^#{1,6}\s+([^\n]+)\n+/, (heading,title:string)=>
                   title.trim().toLowerCase()===unit.title.toLowerCase()?'':heading)}/>
+                {content.verificationError&&<p role="alert" className="notice">{content.verificationError}</p>}
                 {content.excerpt&&<p className="notice">Generated notes are unavailable. These excerpts come from your uploaded material.</p>}
                 {content.webLimited&&!content.references.length&&<small>Web sources were unavailable for this topic.</small>}
-                <SourceStatus references={content.references} generated={!content.excerpt} openSource={reference=>open(null,reference)}/>
+                <SourceStatus references={content.references} generated={!content.excerpt} verification={content.verification} openSource={reference=>open(null,reference)}/>
                 {current&&<div className="lesson-actions">
                   {mode==='study'&&<button type="button" className="link accent" onPointerDown={event=>{if(selectedText)event.preventDefault();}}
                     onClick={()=>discuss({title:unit.title,text:selectedText||content.text,sources:unit.passages})}>
@@ -998,12 +1028,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
               </>:<p role="status">Preparing notes…</p>}
               {(current||mode==='study')&&<SolvedExample key={key} topic={practiceForPage} practice={practice}
                 askCoach={mode==='study'?text=>discuss({title:unit.title,text:selectedText||text,sources:unit.passages}):undefined}
-                renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated)=>
-                  <SourceStatus references={references} generated={generated} openSource={reference=>open(null,reference)}/>}/>}
+                renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated,verification)=>
+                  <SourceStatus references={references} generated={generated} verification={verification} openSource={reference=>open(null,reference)}/>}/>}
               {mode==='study'&&<PracticeQuestions key={unit.id} topic={practiceForPage} practice={practice}
                 selected={selectedQuestions[unit.id]?.id} selectQuestion={selectPractice} askCoach={askPractice} openSource={reference=>open(null,reference)}
-                renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated)=>
-                  <SourceStatus references={references} generated={generated} openSource={reference=>open(null,reference)}/>}/>}
+                renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated,verification)=>
+                  <SourceStatus references={references} generated={generated} verification={verification} openSource={reference=>open(null,reference)}/>}/>}
             </article>;
           })}
           {mode==='study'?<nav className="book-pagination" aria-label="Study pages">
@@ -1023,7 +1053,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {messages.filter(message=>message.inline).map((message,index)=><div key={index}>
           {message.role==='You'?<p>{message.text}</p>:message.pending?(streamingReply?.message===message?<p style={{whiteSpace:'pre-wrap'}}>{streamingReply.text}</p>:<p role="status">Preparing an explanation…</p>):
             message.error?<p role="alert">{message.error} {message.retry&&<button type="button" className="link" onClick={()=>retryAssistant(message)}>Retry</button>}</p>:
-            <><CoachAnswer text={message.text}/><SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/></>}
+            <><CoachAnswer text={message.text}/><SourceStatus references={message.references??[]} generated={Boolean(message.generated)} verification={message.verification} openSource={reference=>open(null,reference)}/></>}
         </div>)}
       </section>}
       <section ref={composer} aria-label="Message composer" className="setup unified-composer">
@@ -1074,7 +1104,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           {message.pending?(streamingReply?.message===message?<p style={{whiteSpace:'pre-wrap'}}>{streamingReply.text}</p>:<small role="status">Thinking…</small>):message.error?<p role="alert">{message.error}{' '}
             {message.retry&&<button type="button" className="link accent" disabled={assistantPending} onClick={()=>retryAssistant(message)}>Retry</button>}</p>
             :message.role==='You'||message.offer?<p>{message.text}</p>:<><CoachAnswer text={message.text}/>
-              <SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/></>}
+              <SourceStatus references={message.references??[]} generated={Boolean(message.generated)} verification={message.verification} openSource={reference=>open(null,reference)}/></>}
           {message.offer&&<button type="button" className="secondary" disabled={mode!=='study'||activePractice?.key!==message.offer.topic.key||practice.batches[message.offer.topic.key]?.pending}
             onClick={()=>{
               const offer=message.offer!;

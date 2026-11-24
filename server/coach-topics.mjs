@@ -1,6 +1,6 @@
 // Only catalog labels may leave the Worker as automatic search terms.
 const groups=[
- ['operating systems',['deadlock prevention','deadlock avoidance',"banker’s algorithm",'deadlock','page replacement','fifo','lru','virtual memory','paging','segmentation','process scheduling','cpu scheduling','process management','operating system structures','system calls','boot sequence','privileged instructions','file systems','disk scheduling','memory management','semaphore','mutex','race condition','thrashing','process synchronization']],
+ ['operating systems',['deadlock prevention','deadlock avoidance',"banker’s algorithm",'deadlock','page replacement','fifo','lru','virtual memory','paging','segmentation','process scheduling','cpu scheduling','process management','operating system structures','system calls','boot sequence','privileged instructions','file systems','disk scheduling','memory management','semaphore','mutex','race condition','thrashing','process synchronization','critical section','mutual exclusion','bounded waiting']],
  ['databases',['database normalization','normalization','functional dependency','third normal form','bcnf','acid properties','serializability','sql joins','database indexing','transactions','er diagram']],
  ['computer networks',['tcp congestion control','tcp','udp','osi model','subnetting','dns','routing','flow control','http','network address translation']],
  ['data structures and algorithms',['binary search tree','binary search','dijkstra','dynamic programming','breadth first search','depth first search','merge sort','quick sort','hash table','time complexity','linked list']],
@@ -66,6 +66,7 @@ export function summarySearchTopic(subject,topics){
 }
 
 const aliases=[
+ ['normalization',/\b(?:normal forms?|[1-5]nf|bcnf)\b/i],
  ['process synchronization',/\b(?:[ce]ritical section|peterson[’']?s? solution)\b/i],
  ['boot sequence',/\b(?:booting|boot sequence)\b/i],
  ['system calls',/\bsystem calls?\b/i],
