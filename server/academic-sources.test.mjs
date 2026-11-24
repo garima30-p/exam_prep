@@ -117,3 +117,20 @@ it('builds a general topic map from an inspected curriculum without a model call
   expect(run).not.toHaveBeenCalled();
  }finally{vi.unstubAllGlobals();}
 });
+
+it('infers an explicitly provisional hierarchy when published material is unavailable',async()=>{
+ const response=JSON.stringify({topics:[
+  {title:'Linear systems',group:''},
+  {title:'Gaussian elimination',group:'Linear systems'},
+  {title:'gaussian elimination',group:'Missing parent'},
+  {title:'Suggested textbooks',group:''},
+ ]});
+ const run=vi.fn(async()=>({response}));
+ const result=await handle(post({task:'outline',subject:'Linear algebra',academicGrounding:true}),{STUDY_AI_ENABLED:'true',AI:{run}});
+ expect(result.status).toBe(200);
+ expect((await result.json()).topics).toEqual([
+  {title:'Linear systems',group:'',validation:'inferred'},
+  {title:'Gaussian elimination',group:'Linear systems',validation:'inferred'},
+ ]);
+ expect(run).toHaveBeenCalledTimes(1);
+});

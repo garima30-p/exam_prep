@@ -135,3 +135,12 @@ it('keeps a reliable text-only exam cover page without trying OCR',async()=>{
     expect(mock.read).not.toHaveBeenCalled();
   }finally{mock.covers.clear();}
 });
+
+it('publishes completed extraction even if worker shutdown never resolves',async()=>{
+  mock.native=new Set();mock.read.mockReset();
+  mock.read.mockResolvedValueOnce(reading(1));
+  mock.destroy.mockImplementationOnce(()=>new Promise<void>(()=>{}));
+  mock.close.mockImplementationOnce(()=>new Promise<void>(()=>{}));
+  const records=await extractDocuments([item(1,1)],options());
+  expect(documentComplete(records[0])).toBe(true);
+});

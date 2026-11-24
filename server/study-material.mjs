@@ -18,7 +18,7 @@ const bulletHeading=/^[-•▪‣]\s*/;
 const withoutMarker=line=>line.replace(bulletHeading,'').replace(numberedHeading,'').trim();
 export const syllabusAdministrative=line=>administrativeLine(withoutMarker(line))||
  administrativeSection(withoutMarker(line))||
- /^(?:suggested (?:books?|readings?|references?)|(?:recommended|required) (?:text(?:books?)?|readings?|books?)|bibliograph(?:y|ies)|references?(?: books?)?|reading list|assessment(?: guidelines?| scheme| criteria| methods?)?|grading(?: policy| scheme)?|evaluation(?: methods?| scheme| criteria)?|course (?:outcomes?|objectives?|requirements?|information)|learning outcomes?|contact hours|examination scheme|instructional hours|teaching methods)(?:\s*[:.–-]|\s*$)/i.test(withoutMarker(line))||
+ /^(?:suggested (?:text(?:books?)?|books?|readings?|references?)|(?:recommended|required) (?:text(?:books?)?|readings?|books?)|bibliograph(?:y|ies)|references?(?: books?)?|reading list|assessment(?: guidelines?| scheme| criteria| methods?)?|grading(?: policy| scheme)?|evaluation(?: methods?| scheme| criteria)?|course (?:outcomes?|objectives?|requirements?|information)|learning outcomes?|contact hours|examination scheme|instructional hours|teaching methods)(?:\s*[:.–-]|\s*$)/i.test(withoutMarker(line))||
  syllabusEnd(line);
 
 export function syllabusSubject(pages){
@@ -91,7 +91,7 @@ export function parseSyllabus(pages,identifiedSubject=''){
  let inside=false,blocked=false,unit=0,unitName='',major='',lastPage=0;
  const add=(title,group,row,level,excerpt=row.text)=>{
   const key=topicKey(title);
-  if(!key||seen.has(key)||key===subjectKey||topics.length>=80)return;
+  if(!key||seen.has(key)||key===subjectKey)return;
   seen.add(key);
   topics.push({title,group:group===title?'':group,subject,unit,level,page:row.page,line:row.line,excerpt,method:row.method,
    validation:row.method==='ocr'?'structured-ocr':'document-structure'});

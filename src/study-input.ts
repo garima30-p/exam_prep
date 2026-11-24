@@ -40,7 +40,7 @@ export function inspectStudyInput(documents:readonly ExtractedDocument[],files:r
     const content=academic.join(' ').slice(0,18000);
     const header=lines.slice(0,18).filter(line=>!administrativeLine(line)).join(' ');
     const declared=syllabusSubject(pages);
-    const subject=studySubject(header)||studySubject(declared)||declared||studySubject(content);
+    const subject=studySubject(header)||studySubject(declared)||declared||studySubject(content)||studySubject(file.file.name.replace(/[_-]/g,' '));
     const questionCount=academic.filter(line=>{const cue=readQuestionCue(line,true);return cue&&!questionRejection(readMarks(cue.text).text);}).length;
     const unitCount=academic.filter(line=>syllabusUnit(line)).length;
     const examHeader=/\b(?:end[ -]?sem(?:ester)?|mid[ -]?sem(?:ester)?|question paper|examination)\b/i.test(header);

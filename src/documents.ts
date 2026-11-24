@@ -233,12 +233,13 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
         record.error='This PDF could not be opened. It may be damaged or password-protected.';
         publish(record.error);
       }finally{
-        await destroy().catch(()=>{});
+        // Extracted pages own their text. PDF worker teardown must not hold up their publication.
+        stop();
       }
     }
     return records;
   }finally{
-    await Promise.all([...workers.keys()].map(releaseWorker));
+    for(const slot of workers.keys())void releaseWorker(slot);
     browserTiming('study:attachments',extractionStarted);
   }
 }

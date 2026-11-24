@@ -10,6 +10,7 @@ export function revise(prompt:string, documents:readonly ExtractedDocument[], fi
   const pasted=prompt.replace(/^[\s\S]*?\b(?:summari[sz]e (?:my |these |the )?notes|(?:my )?notes)\s*:\s*/i,'')
     .split(/(?<=[.!?])\s+|\n+/)
     .filter(line=>!/^\s*(?:my .{0,70}\b(?:exam|test)\b|(?:i (?:have|can study)|only)\s+(?:have\s+|only\s+)?(?:\d|one|two|three|four|five|ten|twenty|thirty)|(?:please )?(?:summari[sz]e|make|build|create|generate|use (?:my |the )?(?:attached|uploaded)\b)\b)/i.test(line))
+    .filter(line=>!/^\s*(?:ye(?:h)?\s+.{1,55}\bka syllabus hai|(?:these|this|here)\s+(?:is|are)\s+(?:my|the)\s+(?:attached |uploaded )?(?:syllabus|exam paper|past paper)|(?:important topics|key topics)\s+bat(?:a|ao))\s*[.!]?\s*$/i.test(line))
     .filter(line=>!/\b(?:exam|test|paper) (?:preparation|revision|hai)\b|\bpreparation for\b/i.test(line)||/\b(?:is defined as|occurs when|means|works by)\b/i.test(line))
     .join('\n');
   const sources:Source[]=[{file:'Pasted text',page:1,number:'Notes',excerpt:pasted}];

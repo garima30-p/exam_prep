@@ -45,6 +45,24 @@ type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subjec
 type Message = {role:'You'|'in-nocent';text:string;references?:CoachSource[];inline?:boolean;
   generated?:boolean;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest;offer?:{topic:PracticeTopic;count:number;format:string}};
 
+// Keep the complete question and newest context within the Worker's byte limit.
+function coachRequestBody(request:CoachRequest) {
+  const bounded={...request,history:[...request.history],sources:[...request.sources],stream:request.task==='chat'};
+  const encoder=new TextEncoder();
+  let body=JSON.stringify(bounded);
+  while(encoder.encode(body).length>18000&&(bounded.history.length||bounded.sources.length)){
+    if(bounded.history.length>2||!bounded.sources.length)bounded.history.splice(0,2);
+    else bounded.sources.pop();
+    body=JSON.stringify(bounded);
+  }
+  if(encoder.encode(body).length>18000)throw new Error('This message is too long to send. Shorten it and try again.');
+  return body;
+}
+
+function topicPriorityLabel(page:BookPage){
+  return page.priority+' priority'+(page.provisionalPriority?' (provisional)':'');
+}
+
 function Icon({name}:{name:'clip'|'send'|'spark'|'file'|'close'|'menu'}) {
   const paths = {
     menu:'M3 6h18M3 12h18M3 18h18',
@@ -98,7 +116,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   },[]);
   const drawerToggle=useRef<HTMLButtonElement>(null);
   const drawerPanel=useRef<HTMLElement>(null);
-  const [savedBook,setBook]=useState<{id:string;subject:string;pages:BookPage[];university:string;promptKey:string}|null>(null);
+  const [savedBook,setBook]=useState<{id:string;subject:string;pages:BookPage[];university:string;promptKey:string;initialRequest:string}|null>(null);
   const [activeTopicId,setActiveTopicId]=useState('');
   const [expandedTopics,setExpandedTopics]=useState<Record<string,boolean>>({});
   const practice=usePractice();
@@ -107,6 +125,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const [bookErrors,setBookErrors]=useState<Record<string,string>>({});
   const [loadingPage,setLoadingPage]=useState<string|null>(null);
   const bookRequest=useRef<AbortController|null>(null);
+  const outlineCache=useRef(new Map<string,TopicOutline[]>());
   const outlineRequest=useRef<{start:()=>void;operation:AbortController}|null>(null);
   const studyHeading=useRef<HTMLHeadingElement>(null);
   const [prompt,setPrompt]=useState('');
@@ -278,7 +297,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       observer.disconnect();
       frame=requestAnimationFrame(()=>{
         browserTiming('study:render',renderStarted);
-        if(mode==='study')outlineRequest.current?.start();
+        outlineRequest.current?.start();
         if(firstContentStarted.current!==null){
           browserTiming('study:first-useful',firstContentStarted.current);
           firstContentStarted.current=null;
@@ -302,7 +321,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(!activeBookPage)return;
     studyHeading.current?.focus({preventScroll:true});
     studyHeading.current?.scrollIntoView?.({block:'start'});
-  },[activeBookPage,mode]);
+  },[activeBookPage?.id,mode]);
   useEffect(()=>{
     if(!book||!activeBookPage||loadingPage||bookRequest.current||bookContent[lessonKey]||bookErrors[lessonKey])return;
     const unit=activeBookPage;
@@ -317,7 +336,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           signal:AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]),
           body:JSON.stringify({task:'notes',mode:'auto',academicGrounding:true,university:book.university,studyUnit:true,learningMode:mode,minutes:context.minutes||undefined,
             subject:book.subject,topics:[unit.title],topic:unit.title,
-            request:'Teach '+unit.title+' to a beginner. Start with the foundation, explain the essential ideas and relationships, then give a short takeaway.',
+            syllabusTopics:unit===book.pages[0]?book.pages.filter(page=>page.scope).slice(0,12).map(page=>page.title):undefined,
+            request:(unit===book.pages[0]&&book.initialRequest?book.initialRequest+'\n\n':'')+'Teach '+unit.title+' to a beginner. Start with the foundation, explain the essential ideas and relationships, then give a short takeaway.',
             priorities:(unit.priorities??unit.questions).slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages.map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'}))})});
         const data=await response.json() as {explanation?:string;code?:string;sources?:CoachSource[];webSearch?:{code:string}};
         if(!response.ok||!data.explanation?.trim()){
@@ -368,7 +388,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         void import('./documents').catch(()=>{});
         if(accepted.some(item=>item.kind==='Past paper'||item.kind==='Syllabus'))warmEmbeddings();
       }
-      clearBook();setAwaitReview(false);
       setDraftAttachmentIds(current=>[...current,...accepted.map(item=>item.id)]);
     }
     setNotice(errors.length ? 'Could not attach ' + errors.join(', ') + '. Add up to 8 files of 20 MB each. Use PDF, DOCX, PPTX, PNG, JPEG, WebP, or BMP. Save older .ppt files as .pptx.' : '');
@@ -407,6 +426,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   async function generate(adjusted=context,attempt:'normal'|'retry'|'continue'='normal',inputPrompt=prompt) {
     if(controller.current||(!inputPrompt.trim()&&!files.length))return;
+    if(attempt==='normal')incomingEvidenceIds.current=draftFiles.map(item=>item.id);
     setNeedsSubject(false);setNotice('');setBusy(true);
     const run=new AbortController();
     controller.current=run;
@@ -432,7 +452,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const allRecords=first.records;
       const allInspected=inspectStudyInput(allRecords,files);
       if(allRecords.length&&!first.partial)setFiles(allInspected.files);
-      if(attempt==='normal')incomingEvidenceIds.current=draftFiles.map(item=>item.id);
       const incomingIds=new Set(incomingEvidenceIds.current);
       const incomingFiles=allInspected.files.filter(item=>incomingIds.has(item.id));
       const incoming=inspectStudyInput(allRecords.filter(document=>incomingIds.has(document.id)),incomingFiles);
@@ -451,7 +470,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       adjusted={...adjusted,subject:requestedSubject};
       const requestedTopic=studyTopic(inputPrompt);
       const focus=requestedTopic.toLowerCase()===adjusted.subject.toLowerCase()?'':requestedTopic;
-      const extracted=revise(focus?'':inputPrompt,records,inspected.files,adjusted.subject);
+      const pastedNotes=focus?'':inputPrompt;
+      const extracted=revise(pastedNotes,records,inspected.files,adjusted.subject);
       if(records.some(document=>!documentComplete(document))&&!extracted&&
         !records.some(document=>document.pages.some(page=>page.text.trim()&&isTrusted(page)))){
         setAwaitReview(true);
@@ -506,27 +526,29 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         }
       }
       const outline:TopicOutline[]=inspected.outline.length?inspected.outline:academicOutline(course?.sources??[]);
-      const needsOutline=!first.partial&&!outline.length&&!focus;
+      const outlineKey=JSON.stringify([bookId,records.map(record=>[record.id,record.pages.filter(isTrusted).map(page=>page.number)])]);
+      const cachedOutline=outlineCache.current.get(outlineKey);
+      const needsOutline=!first.partial&&!outline.length&&!cachedOutline&&!focus;
       const sessionPrompt=studySessionPrompt(inputPrompt);
       const describeSource=(source:Source)=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'});
       let latestRanking:Analysis=analysis;
-      let latestOutline=outline;
+      let latestOutline=outline.length?outline:cachedOutline??outline;
       const buildPages=(topics:typeof outline,ranked:Analysis=latestRanking,passages=extracted?.passages??[])=>bookOutline(ranked,subject,focus,passages,topics).map(page=>({...page,
         passages:page.passages.map(describeSource),
         questions:page.questions.map(question=>({...question,answerSource:question.answerSource?describeSource(question.answerSource):null}))
       }));
-      const pages=buildPages(outline);
+      const pages=buildPages(latestOutline);
       if(!pages.length){requestSubject();return;}
       if(activeSubject.current&&subjectKey(activeSubject.current)!==subjectKey(subject)){
         activeAssistantRequest.current?.abort();activeAssistantRequest.current=null;setAssistantPending(false);
-        setMessages([]);setCoachDraft('');
+        setMessages(current=>current.filter(message=>!message.inline));
       }
       clearBook();
       activeSubject.current=subject;
       evidenceIds.current=scopedIds;
       setContext(current=>({...current,subject}));
       setActiveTopicId(pages[0].id);
-      setBook({id:bookId,subject,pages,university,promptKey:sessionPrompt});
+      setBook({id:bookId,subject,pages,university,promptKey:sessionPrompt,initialRequest:incomingIds.size?inputPrompt.slice(0,320):''});
       const queueOutline=()=>{
         const operation=new AbortController();
         let started=false;
@@ -537,10 +559,16 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             try{
               const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
                 signal:AbortSignal.any([operation.signal,AbortSignal.timeout(25000)]),
-                body:JSON.stringify({task:'outline',subject,university,academicGrounding:true,sources:extracted?.passages??[]})});
+                body:JSON.stringify({task:'outline',subject,university,academicGrounding:true,
+                  topics:[...new Set(latestRanking.questions.filter(question=>question.historical).map(question=>question.topic))].slice(0,12),
+                  sources:extracted?.passages.slice(0,4)??[]})});
               const data=await response.json() as {topics?:TopicOutline[]};
               if(!response.ok||!Array.isArray(data.topics)||!data.topics.length)throw new Error();
               if(!operation.signal.aborted){
+                if(!first.partial){
+                  if(outlineCache.current.size>=8)outlineCache.current.delete(outlineCache.current.keys().next().value!);
+                  outlineCache.current.set(outlineKey,data.topics);
+                }
                 latestOutline=data.topics;
                 const pages=buildPages(latestOutline);
                 setBook(current=>current?.id===bookId&&current.promptKey===sessionPrompt?{...current,pages}:current);
@@ -588,12 +616,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         latestRanking=final;
         latestOutline=completeInput.outline.length?completeInput.outline:latestOutline;
         const updated=buildPages(latestOutline,final,
-          revise(focus?'':inputPrompt,completeRecords,included,subject)?.passages??[]);
+          revise(pastedNotes,completeRecords,included,subject)?.passages??[]);
         setBook(current=>current?.id===bookId&&current.promptKey===sessionPrompt?{...current,pages:updated}:current);
         setResult(final.questions);setWarnings(final.warnings);
-        if(updated.length===1&&!completeInput.outline.length&&!focus){
+        if(!latestOutline.length&&!focus){
           queueOutline();
-          if(mode==='study')outlineRequest.current?.start();
+          outlineRequest.current?.start();
         }
       }
     }catch(error){
@@ -615,8 +643,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       const started=now();
       const signal=AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]);
       const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
-        signal,body:JSON.stringify({...request,stream:request.task==='chat'})});
-      type Reply={explanation?:string;generated?:boolean;sources?:CoachSource[];code?:string};
+        signal,body:coachRequestBody(request)});
+      type Reply={explanation?:string;generated?:boolean;sources?:CoachSource[];code?:string;error?:string};
       let data:Reply={};
       if(response.ok&&response.body&&response.headers.get('content-type')?.startsWith('text/event-stream')){
         let received='';
@@ -632,72 +660,49 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       }else data=await response.json() as Reply;
       browserTiming('study:coach-request',started);
       if(!response.ok||!data.explanation?.trim()){
-        throw new Error(data.code==='usage_limit'?'The AI usage limit has been reached. Try again later.':'Couldn’t answer right now. Try again.');
+        throw new Error(response.status===413?'This message is too long to send. Shorten it and try again.':data.error||'Couldn’t answer right now. Try again.');
       }
       reply={...message,text:data.explanation,generated:data.generated!==false,references:data.sources};
     }catch(error){
       if(operation.signal.aborted)return;
-      const errorMessage=error instanceof Error&&error.message==='The AI usage limit has been reached. Try again later.'
-        ?error.message:'Couldn’t answer right now. Try again.';
+      const errorMessage=error instanceof Error&&error.name==='Error'?error.message:'Couldn’t answer right now. Try again.';
       reply={...message,error:errorMessage,retry:request};
     }finally{
       if(activeAssistantRequest.current===operation){activeAssistantRequest.current=null;setAssistantPending(false);setStreamingReply(null);}
     }
     setMessages(current=>current.map(item=>item===message?{...reply,pending:false}:item));
   }
-  async function send(value:string) {
+  function send(value:string,channel:'main'|'coach'='main') {
     const text=value.trim();
     if(!text||controller.current||activeAssistantRequest.current)return;
     const suppliedMinutes=duration(text);
-    if(suppliedMinutes)setContext(current=>({...current,minutes:suppliedMinutes}));
+    if(channel==='main'){
+      const adjusted=preparationContext(text);
+      setContext({...adjusted,subject:context.subject||book?.subject||adjusted.subject});
+    }else if(suppliedMinutes)setContext(current=>({...current,minutes:suppliedMinutes}));
     const more=text.match(/^(?:please )?(?:generate|add|give me)\s+(\d{1,2})\s+more\s*(.*?)\s*questions\b[.!?]?$/i);
     const requestedFormat=more?.[2].trim()||'';
     const specificFormat=/numerical|coding|conceptual|comparison|theory|analytical|descriptive|multiple.choice/i.test(requestedFormat);
     const fitsTopic=!requestedFormat||specificFormat||activePractice?.page.title.toLowerCase().includes(requestedFormat.toLowerCase());
-    const offer=more&&fitsTopic&&mode==='study'&&activePractice?{topic:activePractice,count:Math.min(10,Math.max(1,Number(more[1]))),
+    const offer=channel==='coach'&&more&&fitsTopic&&mode==='study'&&activePractice?{topic:activePractice,count:Math.min(10,Math.max(1,Number(more[1]))),
       format:specificFormat?requestedFormat:''}:undefined;
-    const inline=mode==='last-minute';
+    const inline=channel==='main';
     const message:Message={role:'in-nocent',inline,text:offer?'I can add these to '+offer.topic.page.title+'.':'',pending:!offer,offer};
-    coachAtBottom.current=true;
-    setCoachDraft('');
+    if(inline){setDraft('');setNotice('');}
+    else {coachAtBottom.current=true;setCoachDraft('');}
     setMessages(current=>[...current,{role:'You',text,inline},message]);
     if(offer)return;
 
-    let records=documents;
-    let retrievalFiles=files;
-    let subject=context.subject||book?.subject||'';
-    if(activeApi.prepare&&files.some(hasPendingAttachment)){
-      const run=new AbortController();
-      controller.current=run;
-      setBusy(true);
-      setProcessingMessage('Opening attachments…');
-      try{
-        records=await readDocuments(run);
-        const inspected=inspectStudyInput(records,files);
-        retrievalFiles=inspected.files;
-        setFiles(retrievalFiles);
-        if(!subject&&inspected.subject){
-          subject=inspected.subject;
-          setContext(current=>({...current,subject:inspected.subject}));
-        }
-      }catch(error){
-        const failure=run.signal.aborted?'Attachment processing was cancelled.':'The attachments could not be opened. Try sending your question again.';
-        setMessages(current=>current.map(item=>item===message?{...message,pending:false,error:failure}:item));
-        return;
-      }finally{
-        if(controller.current===run)controller.current=null;
-        setBusy(false);setProcessingMessage('');
-      }
-    }
-
+    const conversation=messages.filter(item=>Boolean(item.inline)===inline);
+    const subject=book?.subject||context.subject||learningSubject(text);
     const topics=[...new Set((book?.pages.map(page=>page.title)??(result??[]).map(question=>question.topic)))].slice(0,20);
     const numbered=text.match(/(?:#|question\s+)(\d+)/i);
     const selected=numbered?activeBookPage?.questions[Number(numbered[1])-1]:undefined;
-    const previousQuestion=messages.filter(item=>item.role==='You').at(-1)?.text??'';
+    const previousQuestion=conversation.filter(item=>item.role==='You').at(-1)?.text??'';
     const query=new Set((text+' '+previousQuestion+' '+(selected?.topic??'')+' '+topics.join(' ')).toLowerCase().match(/[a-z]{4,}/g)??[]);
-    const retrieved=records.flatMap(document=>{
-      if(evidenceIds.current&&!evidenceIds.current.has(document.id))return [];
-      const kind=retrievalFiles.find(file=>file.id===document.id)?.kind;
+    const retrieved=documents.flatMap(document=>{
+      if(draftAttachmentIds.includes(document.id)||(evidenceIds.current&&!evidenceIds.current.has(document.id)))return [];
+      const kind=files.find(file=>file.id===document.id)?.kind;
       if(kind==='Past paper'||kind==='Administrative'||kind==='Unreadable')return [];
       return document.pages.filter(isTrusted).flatMap(page=>page.text.split(/\n+/).map((line,index)=>({
         file:document.name,page:page.number,number:'Line '+(index+1),documentIndex:document.id,excerpt:line.trim().slice(0,650),
@@ -706,15 +711,15 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       .filter(match=>match.score>0).sort((a,b)=>b.score-a.score).slice(0,8).map(match=>match.source);
     const unit=activeBookPage;
     const unitDiscussion:Discussion|null=unit&&activeBookContent?{title:unit.title,text:activeBookContent.text,sources:unit.passages}:null;
-    const explicitTarget=discussion?.pageId===unit?.id?discussion:null;
+    const explicitTarget=!inline&&discussion?.pageId===unit?.id?discussion:null;
     const target=explicitTarget??unitDiscussion;
-    const question=explicitTarget?explicitTarget.question:mode==='study'?selectedQuestion:undefined;
+    const question=explicitTarget?explicitTarget.question:!inline?selectedQuestion:undefined;
     const candidates=[question?.answerSource,...(target?.sources??[]),...retrieved,selected?.answerSource]
       .filter((candidate):candidate is Source=>Boolean(candidate));
     const sources=[...new Map(candidates.map(candidate=>[candidate.excerpt,candidate])).values()].slice(0,12);
     const history:CoachRequest['history']=[];
-    for(let index=1;index<messages.length;index++){
-      const user=messages[index-1],assistant=messages[index];
+    for(let index=1;index<conversation.length;index++){
+      const user=conversation[index-1],assistant=conversation[index];
       if(user.role==='You'&&assistant.role!=='You'&&assistant.text&&!assistant.error&&!assistant.pending){
         history.push({role:'user',content:user.text.slice(0,1500)},{role:'assistant',content:assistant.text});
       }
@@ -744,9 +749,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     discuss({title:activeBookPage.title,text:item.prompt,sources:item.answerSource?[item.answerSource]:activeBookPage.passages,question:item});
   }
   function submitMessage(){
-    if(busy||activeAssistantRequest.current)return;
+    if(controller.current||activeAssistantRequest.current)return;
     const text=draft.trim();
-    if(needsSubject&&text&&!text.includes('?')&&text.length<=100){
+    if(needsSubject&&!newAttachments&&text&&!text.includes('?')&&text.length<=100){
       const adjusted={...context,subject:activeApi.parse(text).subject||text};
       clearComposer();
       setContext(adjusted);
@@ -755,13 +760,15 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     }
     const examRequest=/\bmy\s+(?:[\w-]+\s+){0,8}(?:exam|midterm)\b|\b(?:(?:study|revision) (?:plan|notes)|(?:help me|i (?:want|need) to) (?:study|revise))\b/i.test(text);
     const summaryRequest=/\bsummari[sz]e\b/i.test(text)&&
-      (!messages.length||/\b(?:attached|syllabus|my notes|study material|past paper|pyq)\b/i.test(text));
+      (!messages.some(message=>message.inline)||/\b(?:attached|syllabus|my notes|study material|past paper|pyq)\b/i.test(text));
     const notes=!text.includes('?')&&text.split(/[.!\n]/).filter(line=>line.trim()).length>=2&&Boolean(revise(text,[],[],''));
-    const newMaterial=newAttachments&&(!text||notes||examRequest||summaryRequest||!book);
+    const detected=learningSubject(text,activeApi.parse(text).subject);
+    const subjectChanged=Boolean(detected&&subjectKey(detected)!==subjectKey(book?.subject??''));
     const studyRequest=(/^teach me\b/i.test(text)&&Boolean(studyTopic(text)))||((!book||/\b(?:exam|paper) (?:preparation|revision|hai)\b/i.test(text))&&Boolean(learningSubject(text))&&!text.includes('?'));
-    const preparation=newMaterial||examRequest||summaryRequest||studyRequest||(!workspaceResult&&notes)||(!text&&!workspaceResult&&(prompt||files.length));
+    const preparation=newAttachments||summaryRequest||(!book&&(examRequest||studyRequest||notes))||
+      (subjectChanged&&!text.includes('?')&&(examRequest||studyRequest))||(!text&&!workspaceResult&&(prompt||files.length));
     if(!preparation){
-      setDraft('');if(mode==='study')setCoachOpen(true);void send(text);
+      send(text);
       return;
     }
     if(!text&&!prompt&&!files.length){
@@ -800,7 +807,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     setNeedsSubject(false);setNotice('');setDiscussion(null);setDraftAttachmentIds([]);setPreviewAttachmentId(null);
   }
   function modifyFile(id:number,kind?:string) {
-    clearBook();
+    if(!draftAttachmentIds.includes(id))clearBook();
     setFiles(current=>kind?current.map(file=>file.id===id?{...file,kind,kindOverride:true}:file):current.filter(file=>file.id!==id));
     if(!kind){
       setDocuments(current=>current.filter(document=>document.id!==id));
@@ -858,8 +865,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const pack:StudyPack={subject:book?.subject??'',context:[],notes:[],timeline:[],questions:[],warnings,
     generatedNotes:activeBookContent?{text:activeBookContent.text,references:activeBookContent.references.map(reference=>
       reference.kind==='uploaded'?sourceLabel(reference):reference.title+' · '+reference.url)}:undefined};
-  const mapTopic=(page:BookPage,index:number)=><button type="button" className="link"
-    aria-current={bookIndex===index?'location':undefined} onClick={()=>{mapDialog.current?.close?.();openBookPage(index);}}>
+  const mapTopic=(page:BookPage,index:number)=><button type="button" className="link" data-topic-priority={index?page.priority:undefined}
+    aria-description={index?topicPriorityLabel(page):undefined} aria-current={bookIndex===index?'location':undefined} onClick={()=>{mapDialog.current?.close?.();openBookPage(index);}}>
     {page.title}
   </button>;
   const mapEntries=book?.pages.map((page,index)=>({page,index}))??[];
@@ -892,7 +899,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const mapOrigin=mapEntries.some(entry=>entry.page.scope)?'Uploaded syllabus':
     mapEntries.some(entry=>entry.page.reference?.category==='official-syllabus')?'Official university syllabus':
     mapEntries.some(entry=>entry.page.reference)?'General academic outline':
-    'No verified syllabus outline';
+    mapEntries.length>1?'Inferred topic outline':'No verified syllabus outline';
   const topicMap=book&&<div className="topic-map">
     {book.pages[0].title===book.subject?mapTopic(book.pages[0],0):<strong>{book.subject}</strong>}
     <small>{mapOrigin}</small>
@@ -918,7 +925,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       {modeButtons('Preparation modes in navigation')}
       {(context.subject||book?.subject)&&<div className="drawer-exam"><small>Current examination</small><p>{context.subject||book?.subject}</p></div>}
       {book&&<nav aria-label="Table of contents"><h2>Contents</h2><ol>
-        {book.pages.map((unit,index)=><li key={unit.id}><button type="button" aria-current={bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
+        {book.pages.map((unit,index)=><li key={unit.id}><button type="button" data-topic-priority={index?unit.priority:undefined} aria-description={index?topicPriorityLabel(unit):undefined} aria-current={bookIndex===index?'page':undefined} onClick={()=>openBookPage(index)}>
           <span aria-hidden="true">{index+1}</span>{unit.title}</button></li>)}
       </ol></nav>}
       {files.some(item=>!draftAttachmentIds.includes(item.id))&&<section aria-labelledby="attached-documents-title">
@@ -937,13 +944,6 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {!busy&&reviewDocuments.length>0&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ {reviewLabel}</button>}
         {!busy&&!reviewDocuments.length&&warnings.some(warning=>warning.startsWith('OCR-only'))&&<button className="link review-notice" onClick={()=>infoDialog.current?.showModal()}>⚠ OCR evidence needs review</button>}
       </div>
-      {mode==='last-minute'&&messages.some(message=>message.inline)&&<section className="learning-notes inline-learning" aria-label="Inline explanations">
-        {messages.filter(message=>message.inline).slice(-2).map((message,index)=><div key={index}>
-          {message.role==='You'?<p>{message.text}</p>:message.pending?(streamingReply?.message===message?<p style={{whiteSpace:'pre-wrap'}}>{streamingReply.text}</p>:<p role="status">Preparing an explanation…</p>):
-            message.error?<p role="alert">{message.error} {message.retry&&<button type="button" className="link" onClick={()=>retryAssistant(message)}>Retry</button>}</p>:
-            <><CoachAnswer text={message.text}/><SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/></>}
-        </div>)}
-      </section>}
       {book&&activeBookPage&&<div className="learning-layout">
         <div className="mobile-learning-actions">
           <button type="button" className="secondary" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>
@@ -981,11 +981,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 {content.webLimited&&!content.references.length&&<small>Web sources were unavailable for this topic.</small>}
                 <SourceStatus references={content.references} generated={!content.excerpt} openSource={reference=>open(null,reference)}/>
                 {current&&<div className="lesson-actions">
-                  <button type="button" className="link accent" onPointerDown={event=>{if(selectedText)event.preventDefault();}}
-                    onClick={()=>{
-                      if(mode==='last-minute')void send('Explain the essentials of '+unit.title+'.');
-                      else discuss({title:unit.title,text:selectedText||content.text,sources:unit.passages});
-                    }}>{mode==='last-minute'?'Explain this topic':'Ask Coach'+(selectedText?' about selection':'')}</button>
+                  {mode==='study'&&<button type="button" className="link accent" onPointerDown={event=>{if(selectedText)event.preventDefault();}}
+                    onClick={()=>discuss({title:unit.title,text:selectedText||content.text,sources:unit.passages})}>
+                    {'Ask Coach'+(selectedText?' about selection':'')}</button>}
                   {mode==='last-minute'&&<button type="button" className="link accent" onClick={()=>selectMode('study')}>Explore deeper</button>}
                   {mode==='last-minute'&&recallPage!==key&&<button type="button" className="link accent" onClick={()=>{rememberTopic();setRecallPage(key);}}>Quick Recall</button>}
                 </div>}
@@ -1021,6 +1019,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           {topicMap}
         </aside>
       </div>}
+      {messages.some(message=>message.inline)&&<section className="learning-notes inline-learning" aria-label="Inline explanations">
+        {messages.filter(message=>message.inline).map((message,index)=><div key={index}>
+          {message.role==='You'?<p>{message.text}</p>:message.pending?(streamingReply?.message===message?<p style={{whiteSpace:'pre-wrap'}}>{streamingReply.text}</p>:<p role="status">Preparing an explanation…</p>):
+            message.error?<p role="alert">{message.error} {message.retry&&<button type="button" className="link" onClick={()=>retryAssistant(message)}>Retry</button>}</p>:
+            <><CoachAnswer text={message.text}/><SourceStatus references={message.references??[]} generated={Boolean(message.generated)} openSource={reference=>open(null,reference)}/></>}
+        </div>)}
+      </section>}
       <section ref={composer} aria-label="Message composer" className="setup unified-composer">
         <form onSubmit={event=>{event.preventDefault();submitMessage();}} className={'composer '+(dragging?'dragging':'')} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);attachment(e.dataTransfer.files);}}>
           <label htmlFor="prompt" className="sr-only">Ask a question or paste notes</label>
@@ -1079,11 +1084,11 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         </div>)}
         </div>
       </div>
-      <form className="coach-input" onSubmit={event=>{event.preventDefault();void send(coachDraft);}}>
+      <form className="coach-input" onSubmit={event=>{event.preventDefault();send(coachDraft,'coach');}}>
         <label htmlFor="coach-prompt" className="sr-only">Ask Study Coach</label>
         <textarea id="coach-prompt" ref={coachInput} rows={2} maxLength={500} value={coachDraft}
           onChange={event=>setCoachDraft(event.target.value)} placeholder="Ask about your work…"
-          onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();void send(coachDraft);}}}/>
+          onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.nativeEvent.isComposing&&event.keyCode!==229){event.preventDefault();send(coachDraft,'coach');}}}/>
         <button className="primary icon-btn" type="submit" aria-label="Send to Coach" disabled={busy||assistantPending||!coachDraft.trim()}><Icon name="send"/></button>
       </form>
     </aside>

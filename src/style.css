@@ -439,4 +439,11 @@ dialog::backdrop{background:var(--backdrop)}
 .academic-scope{display:grid;gap:.25rem;margin:.4rem 0 .9rem;color:var(--muted)}
 .inline-learning{width:min(100%,48rem);margin:.75rem auto}
 .learning-section[hidden]{display:none}
+[data-topic-priority="high"]{--topic-priority:#9c2034}
+[data-topic-priority="medium"]{--topic-priority:#93450f}
+[data-topic-priority="lower"]{--topic-priority:#575c62}
+:root[data-theme^="anime-"] [data-topic-priority="high"]{--topic-priority:#ff9fa9}
+:root[data-theme^="anime-"] [data-topic-priority="medium"]{--topic-priority:#ffc286}
+:root[data-theme^="anime-"] [data-topic-priority="lower"]{--topic-priority:#c8bccc}
+.topic-map button[data-topic-priority],.study-drawer li button[data-topic-priority]{color:var(--topic-priority)}
 .topic-map [aria-current]{background:var(--subtle);border-radius:.4rem;padding-inline:.45rem}
