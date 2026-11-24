@@ -1,3 +1,4 @@
+import { parseSyllabus } from '../server/study-material.mjs';
 import { createWorker, OEM, PSM } from 'tesseract.js';
 import workerPath from 'tesseract.js/dist/worker.min.js?url';
 import corePath from 'tesseract.js-core/tesseract-core-lstm.wasm.js?url';
@@ -46,10 +47,19 @@ export async function createOcr(signal:AbortSignal) {
     async read(page:PDFPageProxy,kind:string,manual:boolean,onPass:(pass:number)=>void) {
       const original=page.getViewport({scale:1});
       const deviceMemory=(navigator as Navigator&{deviceMemory?:number}).deviceMemory;
-      const scale=scanScale(original.width,original.height,deviceMemory&&deviceMemory<=4?4_500_000:7_000_000);
+      const fullScale=scanScale(original.width,original.height,deviceMemory&&deviceMemory<=4?4_500_000:7_000_000);
+      const passes=scanPasses(original.width,original.height,manual);
+      const earlyDpi=kind==='Syllabus'?175:200;
+      const preview=!manual&&(kind==='Notes'||kind==='Syllabus')&&original.height>original.width&&fullScale>earlyDpi/72;
+      const schedule=preview?[{...passes[0],preview:true},...passes]:passes;
+      let bestDpi=Math.round(fullScale*72);
+      let interrupted=false;
       const attempts:Reading[]=[];
       let best:Reading|null=null;
-      for(const [index,pass] of scanPasses(original.width,original.height,manual).entries()){
+      let reviewPreview:Reading|null=null;
+      for(const [index,pass] of schedule.entries()){
+        const reduced='preview' in pass;
+        const scale=reduced?earlyDpi/72:fullScale;
         signal.throwIfAborted();
         onPass(index+1);
         const viewport=page.getViewport({scale,rotation:(page.rotate+pass.rotation)%360});
@@ -82,14 +92,31 @@ export async function createOcr(signal:AbortSignal) {
           const reading={text:parts.map(part=>formatPageText(part.text,kind)).join('\n\n').trim(),confidence,
             variant:pass.filter+' · '+(gutter?'two-column':pass.layout)+' · '+pass.rotation+'° extra rotation'};
           attempts.push(reading);
-          best=chooseReading(best,reading,kind);
+          if(reduced){
+            const technical=/[=+×÷√∑∫<>]|\b(?:formula|equation|calculate|matrix|algorithm|code)\b/i.test(reading.text);
+            const prose=reading.text.split(/\r?\n/).filter(line=>/^[\p{Lu}].{24,}[.!]$/u.test(line.trim())).length>=2;
+            const structured=kind==='Syllabus'?prose||parseSyllabus([{number:1,text:reading.text}]).length>=2:!(/\d/.test(reading.text));
+            if(confidence<92||technical||!structured){
+              if(reading.text)reviewPreview=reading;
+              continue;
+            }
+          }
+          const preferred:Reading=chooseReading(best,reading,kind);
+          if(preferred===reading)bestDpi=Math.round(scale*72);
+          best=preferred;
           if(pageQuality(reading.text,kind,reading.confidence).status==='extracted')break;
+        } catch(error){
+          signal.throwIfAborted();
+          if(!best&&!reviewPreview)throw error;
+          interrupted=true;
+          break;
         } finally {
           canvas.width=canvas.height=0;
         }
         await new Promise<void>(resolve=>setTimeout(resolve,0));
       }
-      return {best,attempts,dpi:Math.round(scale*72),rotation:page.rotate};
+      return {best:best??reviewPreview,attempts,dpi:best?bestDpi:reviewPreview?earlyDpi:bestDpi,
+        rotation:page.rotate,interrupted,unconfirmed:!best&&Boolean(reviewPreview)};
     },
     close
   };

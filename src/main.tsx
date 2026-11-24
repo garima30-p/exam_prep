@@ -1,3 +1,4 @@
+import type {ReactNode} from 'react';
 import {warmEmbeddings} from './embeddings';
 import {readStudyEvents} from '../server/study-stream.mjs';
 import {browserTiming,now} from '../server/performance.mjs';
@@ -389,13 +390,13 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   }
   function hasPendingAttachment(item:Material){
     const record=documents.find(document=>document.id===item.id);
-    return !record||record.pages.some(page=>page.status==='pending');
+    return !record||record.total===null&&!record.error||record.pages.some(page=>page.status==='pending');
   }
-  async function readDocuments(run:AbortController,retry=false){
+  async function readDocuments(run:AbortController,retry=false,onProgress?:(records:ExtractedDocument[])=>void){
     let records=documents.filter(document=>files.some(file=>file.id===document.id));
     if(activeApi.prepare&&files.length&&(retry||files.some(hasPendingAttachment))){
       records=await activeApi.prepare(files,{records,cache:documentCache.current,signal:run.signal,retry,
-        onUpdate:({documents:updated,message})=>{setDocuments(updated);setProcessingMessage(message);}});
+        onUpdate:({documents:updated,message})=>{setDocuments(updated);setProcessingMessage(message);onProgress?.(updated);}});
       run.signal.throwIfAborted();
       setDocuments(records);
     }
@@ -410,14 +411,28 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     void loadStudyMarkdown().catch(()=>{});
     setProcessingMessage(activeApi.prepare&&files.length?'Reading attachments…':'Finding your first topic…');
     try{
-      const allRecords=await readDocuments(run,attempt==='retry');
+      let offerPartial:((records:ExtractedDocument[])=>void)|undefined;
+      const firstReady=new Promise<ExtractedDocument[]>(resolve=>{offerPartial=resolve;});
+      const explicit=learningSubject(inputPrompt,activeApi.parse(inputPrompt).subject);
+      const complete=readDocuments(run,attempt==='retry',records=>{
+        if(!offerPartial||!records.some(record=>record.total===null||record.pages.some(page=>page.status==='pending'))||
+           !records.some(record=>record.pages.some(isTrusted)))return;
+        const snapshot=inspectStudyInput(records,files);
+        const subject=explicit||snapshot.subject;
+        if(!subject||(!snapshot.outline.length&&!revise('',records,snapshot.files,subject)))return;
+        offerPartial(records);offerPartial=undefined;
+      });
+      const first=await Promise.race([
+        complete.then(records=>({records,partial:false})),
+        firstReady.then(records=>({records,partial:true}))
+      ]);
+      const allRecords=first.records;
       const allInspected=inspectStudyInput(allRecords,files);
-      if(allRecords.length)setFiles(allInspected.files);
+      if(allRecords.length&&!first.partial)setFiles(allInspected.files);
       if(attempt==='normal')incomingEvidenceIds.current=draftFiles.map(item=>item.id);
       const incomingIds=new Set(incomingEvidenceIds.current);
       const incomingFiles=allInspected.files.filter(item=>incomingIds.has(item.id));
       const incoming=inspectStudyInput(allRecords.filter(document=>incomingIds.has(document.id)),incomingFiles);
-      const explicit=learningSubject(inputPrompt,activeApi.parse(inputPrompt).subject);
       const requestedSubject=explicit||incoming.subject||adjusted.subject||allInspected.subject;
       const changingSubject=Boolean(activeSubject.current&&requestedSubject&&subjectKey(activeSubject.current)!==subjectKey(requestedSubject));
       const scopedFiles=allInspected.files.filter(item=>{
@@ -486,12 +501,12 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         }
       }
       const officialTopics=(course?.sources??[]).filter(source=>source.category==='official-syllabus').flatMap(source=>source.scopeTopics??[]);
-      const outline=[...new Set([...officialTopics.map(title=>title.replace(/^./,letter=>letter.toUpperCase())),...inspected.topics])].map(title=>({title,group:''}));
-      const needsOutline=!outline.length&&!analysis.questions.length&&!focus&&subject!=='Operating Systems';
+      const outline=inspected.outline.length?inspected.outline:officialTopics.map(title=>({title:title.replace(/^./,letter=>letter.toUpperCase()),group:'',source:undefined}));
+      const needsOutline=!first.partial&&!outline.length&&!analysis.questions.length&&!focus;
       const sessionPrompt=studySessionPrompt(inputPrompt);
       const describeSource=(source:Source)=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'});
       const initialRanking=analysis;
-      const buildPages=(topics:typeof outline,ranked=initialRanking)=>bookOutline(ranked,subject,focus,extracted?.passages??[],topics).map(page=>({...page,
+      const buildPages=(topics:typeof outline,ranked=initialRanking,passages=extracted?.passages??[])=>bookOutline(ranked,subject,focus,passages,topics).map(page=>({...page,
         passages:page.passages.map(describeSource),
         questions:page.questions.map(question=>({...question,answerSource:question.answerSource?describeSource(question.answerSource):null}))
       }));
@@ -507,7 +522,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       setContext(current=>({...current,subject}));
       setActiveTopicId(pages[0].id);
       setBook({id:bookId,subject,pages,university,promptKey:sessionPrompt});
-      if(needsOutline){
+      const queueOutline=()=>{
         const operation=new AbortController();
         let started=false;
         outlineRequest.current={operation,start:()=>{
@@ -529,7 +544,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             }
           })();
         }};
-      }
+      };
+      if(needsOutline)queueOutline();
       setResult(analysis.questions);setWarnings(analysis.warnings);
       if(refinement&&analyzed.current.get(key)!==analysis){
         setProcessingMessage('Checking related questions…');
@@ -540,6 +556,36 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         setBook(current=>current?.id===bookId&&current.promptKey===sessionPrompt?{...current,
           pages:refined.map(page=>({...page,id:originalIds.get(page.title)??page.id}))}:current);
         setResult(final.questions);setWarnings(final.warnings);
+      }
+      if(first.partial){
+        const finished=await complete;
+        run.signal.throwIfAborted();
+        const reviewed=inspectStudyInput(finished,files);
+        setFiles(reviewed.files);
+        const included=reviewed.files.filter(file=>{
+          const record=finished.find(document=>document.id===file.id);
+          const detected=record?inspectStudyInput([record],[file]).subject:'';
+          return detected?subjectKey(detected)===subjectKey(subject):scopedIds.has(file.id);
+        });
+        const ids=new Set(included.map(file=>file.id));
+        const completeRecords=finished.filter(record=>ids.has(record.id));
+        const completeInput=inspectStudyInput(completeRecords,included);
+        const finalKey=JSON.stringify([sessionPrompt,included.map(file=>[file.id,file.kind]),completeRecords]);
+        setProcessingMessage('Updating topics from the remaining pages…');
+        const final=analyzed.current.get(finalKey)??await activeApi.analyze({...adjusted,minutes:0},included,inputPrompt,
+          {learning:true,documents:completeRecords,signal:run.signal});
+        run.signal.throwIfAborted();
+        if(analyzed.current.size>=8)analyzed.current.delete(analyzed.current.keys().next().value!);
+        analyzed.current.set(finalKey,final);
+        evidenceIds.current=ids;
+        const updated=buildPages(completeInput.outline.length?completeInput.outline:outline,final,
+          revise(focus?'':inputPrompt,completeRecords,included,subject)?.passages??[]);
+        setBook(current=>current?.id===bookId&&current.promptKey===sessionPrompt?{...current,pages:updated}:current);
+        setResult(final.questions);setWarnings(final.warnings);
+        if(updated.length===1&&!completeInput.outline.length&&!final.questions.length&&!focus){
+          queueOutline();
+          if(mode==='study')outlineRequest.current?.start();
+        }
       }
     }catch(error){
       setNotice(run.signal.aborted?'Reading cancelled. Send again to resume.':error instanceof Error?error.message:'These notes could not load. Try again.');
@@ -807,18 +853,21 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     aria-current={bookIndex===index?'location':undefined} onClick={()=>{mapDialog.current?.close();openBookPage(index);}}>
     {page.title}
   </button>;
+  const mapEntries=book?.pages.map((page,index)=>({page,index}))??[];
+  function mapBranch(entry:typeof mapEntries[number],ancestorIds:readonly string[]=[]):ReactNode{
+    const {page,index}=entry;
+    if(ancestorIds.includes(page.id))return null;
+    const path=[...ancestorIds,page.id];
+    const children=mapEntries.filter(child=>child.page.group===page.title&&child.page.id!==page.id);
+    return <li key={page.id}>{mapTopic(page,index)}{children.length>0&&<ul>
+      {children.map(child=>mapBranch(child,path))}
+    </ul>}</li>;
+  }
   const topicMap=book&&<div className="topic-map">
     {book.pages[0].title===book.subject?mapTopic(book.pages[0],0):<strong>{book.subject}</strong>}
-    {Array.from(new Set(book.pages.map(page=>page.group))).map(group=>{
-      const entries=book.pages.map((page,index)=>({page,index}))
-        .filter(({page,index})=>page.group===group&&(index!==0||page.title!==book.subject));
-      if(!entries.length)return null;
-      const parent=entries.find(({page})=>page.title===group);
-      return <div key={group} className="topic-branch">
-        {parent?mapTopic(parent.page,parent.index):group&&<span>{group}</span>}
-        <ul>{entries.filter(entry=>entry!==parent).map(({page,index})=><li key={page.id}>{mapTopic(page,index)}</li>)}</ul>
-      </div>;
-    })}
+    <div className="topic-branch"><ul>{mapEntries.filter(({page,index})=>
+      (index!==0||page.title!==book.subject)&&(!page.group||page.group===book.subject||!mapEntries.some(entry=>entry.page.title===page.group))
+    ).map(entry=>mapBranch(entry))}</ul></div>
   </div>;
   const modeButtons=(label:string)=><nav className="preparation-modes" aria-label={label}>
     <button type="button" disabled={busy} aria-pressed={mode==='last-minute'} onClick={()=>selectMode('last-minute')}>Last Minute</button>
@@ -870,6 +919,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <button type="button" className="secondary" onClick={()=>{outlineRequest.current?.start();mapDialog.current?.showModal();}}>Topic Map</button>
         </div>
         <section ref={studyNotes} className="learning-notes" aria-label={mode==='study'?'Study workspace':'Study notes'}>
+          {busy&&documents.some(record=>record.total===null||record.pages.some(page=>page.status==='pending'))&&
+            <small>Showing readable pages while the remaining pages are checked.</small>}
           {academic===null&&book.university&&<p className="notice">University references could not be checked. Use uploaded material or general explanations.</p>}
           {academic&&<div className="academic-scope">
             {academic.scope.requested&&<small>{academic.scope.officialSyllabus?'Official syllabus located for '+(academic.scope.institution??'the named university')+'.'
@@ -889,6 +940,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
                 {current&&theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={0}/>}
                 <h2 tabIndex={current?-1:undefined} ref={current?studyHeading:undefined}>{unit.title}</h2>
               </header>
+              {unit.scope&&<SourceStatus references={[{...unit.scope,kind:'uploaded',id:unit.id}]} generated={false} openSource={reference=>open(null,reference)}/>}
               {mode==='study'&&current&&<h3 className="study-introduction">Introduction</h3>}
               {content?<div className="learning-body">
                 <CoachAnswer text={content.text.replace(/^#{1,6}\s+([^\n]+)\n+/, (heading,title:string)=>
@@ -928,8 +980,8 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>← Previous</button>
             <span className="book-page-number">Page {bookIndex+1} of {book.pages.length}</span>
             <button type="button" className="secondary" disabled={bookIndex+1===book.pages.length} onClick={()=>openBookPage(bookIndex+1,true)}>Next →</button>
-          </nav>:activeBookContent&&bookIndex+1<book.pages.length&&
-            <button type="button" className="secondary" onClick={()=>openBookPage(bookIndex+1,true)}>Next topic →</button>}
+          </nav>:activeBookContent&&(bookIndex+1<book.pages.length||outlineRequest.current)&&
+            <button type="button" className="secondary" onClick={()=>{if(bookIndex+1<book.pages.length)openBookPage(bookIndex+1,true);else {outlineRequest.current?.start();mapDialog.current?.showModal?.();}}}>Next topic →</button>}
         </section>
         <aside className="learning-sidebar" aria-label="Learning tools">
           <button type="button" className="secondary" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>

@@ -1,4 +1,4 @@
-import type { Analysis, Question, RankedQuestion, Source } from './api';
+import type { Analysis, Question, Source } from './api';
 import { duration } from './api';
 import { studySubject } from '../server/coach-topics.mjs';
 
@@ -8,6 +8,7 @@ export type BookPage = {
   group: string;
   questions: readonly Question[];
   passages: Source[];
+  scope?:Source;
 };
 
 export function studyTopic(prompt: string) {
@@ -15,57 +16,45 @@ export function studyTopic(prompt: string) {
 }
 
 const normalize=(text:string)=>text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-const osGroups=[
-  {title:'Process Management',topics:['CPU Scheduling','Process Synchronization','Deadlock'],match:/process|schedul|synchron|deadlock|semaphore|mutex|critical section|banker/},
-  {title:'Memory Management',topics:['Paging','Segmentation','Page Replacement'],match:/memory|paging|segmentation|replacement|fifo|lru|thrashing/},
-  {title:'Storage and I/O',topics:[],match:/file system|disk|storage|device|input output/}
-];
-
 export function learningSubject(text:string,fallback='') {
   const subject=studySubject(text);
   if(subject==='operating systems')return 'Operating Systems';
   return fallback||subject.replace(/\b\w/g,letter=>letter.toUpperCase());
 }
 
-export function bookOutline(analysis:Analysis,subject:string,focus:string,passages:readonly Source[], outline:readonly {title:string;group:string}[]=[]) {
-  const os=studySubject(subject)==='operating systems';
-  const evidence=new Map<string,{title:string;questions:Question[];score:number}>();
-  const candidates=analysis.optimization?.candidates??analysis.questions;
-  for(const question of candidates){
-    const id=normalize(question.topic);
-    if(!id)continue;
-    const record=evidence.get(id)??{title:question.topic,questions:[],score:0};
-    record.questions.push(question);
-    record.score=Math.max(record.score,'priorityScore' in question?(question as RankedQuestion).priorityScore:1);
-    evidence.set(id,record);
+export function bookOutline(analysis:Analysis,subject:string,focus:string,passages:readonly Source[],
+  outline:readonly {title:string;group:string;source?:Source}[]=[]) {
+  const root=focus||subject;
+  const evidence=new Map<string,Question[]>();
+  const ranked=analysis.optimization?.candidates??analysis.questions;
+  const structured=outline.some(entry=>entry.source);
+  const searchable=(value:string)=>' '+normalize(value)+' ';
+  const rankedHeadings=outline.filter(entry=>normalize(entry.title).includes(' ')).sort((a,b)=>b.title.length-a.title.length);
+  for(const question of ranked){
+    const own=normalize(question.topic);
+    const match=structured?outline.find(entry=>normalize(entry.title)===own)
+      ??rankedHeadings.find(entry=>searchable(question.prompt).includes(searchable(entry.title))):undefined;
+    const key=normalize(match?.title??(structured?root:question.topic));
+    if(!key)continue;
+    const items=evidence.get(key)??[];
+    items.push(question);evidence.set(key,items);
   }
-  const ranked=[...evidence.values()].sort((a,b)=>b.score-a.score);
-  const titles=[focus||subject];
-  const outlineGroups=new Map(outline.map(item=>[normalize(item.title),item.group]));
-  if(os&&!focus){
-    for(const group of osGroups){
-      const related=[...ranked,...outline].filter(entry=>group.match.test(normalize(entry.title)));
-      const children=related.length?related.map(entry=>entry.title):outline.length?[]:group.topics;
-      if(children.length)titles.push(group.title,...children);
-    }
-  }
-  titles.push(...outline.map(entry=>entry.title),...ranked.map(entry=>entry.title));
+  const titles=[{title:root,group:'',source:undefined},...outline,...(structured?[]:
+    [...evidence.values()].map(questions=>({title:questions[0].topic,group:'',source:undefined})))];
   const used=new Set<string>();
-  return titles.flatMap(title=>{
+  return titles.flatMap(({title,group,source})=>{
     const id=normalize(title);
     if(!id||used.has(id))return [];
     used.add(id);
-    const group=osGroups.find(entry=>os&&entry.match.test(id));
-    const questions=evidence.get(id)?.questions??[];
-    const first=questions[0];
+    const questions=evidence.get(id)??[];
     const words=id.split(' ').filter(word=>word.length>3);
     const relevant=passages.filter(source=>words.some(word=>normalize(source.excerpt).includes(word)));
     const sources=[...questions.flatMap(question=>question.answerSource?[question.answerSource]:[]),
-      ...(id===normalize(focus||subject)&&!relevant.length?passages:relevant)];
-    const identity=JSON.stringify([normalize(subject),id,...(first&&'topicIds' in first?(first as RankedQuestion).topicIds.slice().sort():[])]);
-    const page:BookPage={id:identity,title,group:group?.title??outlineGroups.get(id)??'',questions,passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
+      ...(id===normalize(root)&&!relevant.length?passages:relevant)];
+    const page:BookPage={id:JSON.stringify([normalize(subject),id]),title,group,questions,scope:source,
+      passages:[...new Map(sources.map(source=>[source.excerpt,source])).values()].slice(0,8)};
     return [page];
-  }).slice(0,16);
+  }).slice(0,structured?80:16);
 }
 
 export function studySessionPrompt(prompt:string) {

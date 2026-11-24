@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist';
+import { getDocument, GlobalWorkerOptions, OPS, Util } from 'pdfjs-dist';
 import type { PDFPageProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { chooseReading, countQuestions, countSupportedOcrQuestions, formatPageText, pageQuality } from '../server/page-text.mjs';
@@ -12,6 +12,8 @@ import { documentFormat } from './document-formats';
 
 GlobalWorkerOptions.workerSrc=workerUrl;
 
+const rasterOperations=new Set([OPS.paintImageXObject,OPS.paintInlineImageXObject,OPS.paintInlineImageXObjectGroup,
+  OPS.paintImageXObjectRepeat,OPS.paintImageMaskXObject,OPS.paintImageMaskXObjectGroup,OPS.paintImageMaskXObjectRepeat]);
 const pending=(number:number):ExtractedPage=>({number,text:'',status:'pending',method:'none',questions:0,reason:''});
 
 async function nativeText(page:PDFPageProxy,signal:AbortSignal) {
@@ -41,7 +43,23 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
     return existing?{...existing,pages:existing.pages.slice()}:{id:file.id,name:file.file.name,total:null,pages:[]};
   });
   const publish=(message:string)=>onUpdate({documents:records.map(record=>({...record,pages:record.pages.slice()})),message});
-  let ocr:Awaited<ReturnType<typeof import('./ocr').createOcr>>|undefined;
+  type OcrWorker=Awaited<ReturnType<typeof import('./ocr').createOcr>>;
+  const workers=new Map<number,OcrWorker>();
+  async function workerFor(slot:number){
+    const existing=workers.get(slot);
+    if(existing)return existing;
+    const started=now();
+    try{
+      const worker=await (await import('./ocr')).createOcr(signal);
+      workers.set(slot,worker);
+      return worker;
+    }finally{browserTiming('study:ocr-init',started);}
+  }
+  async function releaseWorker(slot:number){
+    const worker=workers.get(slot);
+    workers.delete(slot);
+    await worker?.close().catch(()=>{});
+  }
   try {
     for(const [fileIndex,item] of files.entries()){
       signal.throwIfAborted();
@@ -72,7 +90,7 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
         }
       }
       const remember=()=>{
-        if(!cache||!cacheKey||record.error||record.total===null||record.pages.some(page=>page.status==='pending'||page.method==='manual')||!record.pages.some(page=>page.text))return;
+        if(!cache||!cacheKey||record.error||record.total===null||record.pages.some(page=>page.status==='pending'||page.method==='manual'))return;
         if(cache.size>=12&&!cache.has(cacheKey))cache.delete(cache.keys().next().value!);
         cache.set(cacheKey,{...record,pages:record.pages.slice()});
       };
@@ -106,7 +124,7 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
         record.pages=[cached];
         try {
           publish('Scanning '+label());
-          ocr??=await (await import('./ocr')).createOcr(signal);
+          const ocr=await workerFor(0);
           const started=now();
           const reading=await ocr.readImage(item.file,item.kind,Boolean(retry)).finally(()=>browserTiming('study:ocr',started));
           const prior=cached.text?{text:cached.text,confidence:cached.confidence??null,variant:'Prior image'}:null;
@@ -118,8 +136,7 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
             attempts:[...cached.attempts??[],{variant:reading.variant,confidence:reading.confidence}].slice(-16)}];
         }catch{
           signal.throwIfAborted();
-          await ocr?.close().catch(()=>{});
-          ocr=undefined;
+          await releaseWorker(0);
           record.pages=[{...cached,status:cached.text?'review':'failed',method:'ocr',reason:'The image could not be read. Check the original or retry.'}];
         }
         remember();
@@ -127,62 +144,89 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
         continue;
       }
       data??=await abortable(item.file.arrayBuffer(),signal);
+      const pdfStarted=now();
       const task=getDocument({data,enableXfa:false,wasmUrl:new URL('/pdfjs/wasm/',location.href).href});
       let destruction:Promise<void>|undefined;
       const destroy=()=>destruction??=task.destroy();
       const stop=()=>{void destroy().catch(()=>{});};
       try{
-        const document=await abortable(task.promise,signal,stop);
+        const document=await abortable(task.promise,signal,stop).finally(()=>browserTiming('study:pdf-load',pdfStarted));
         record.total=document.numPages;
         record.error=undefined;
         const cached=new Map(record.pages.map(page=>[page.number,page]));
         record.pages=Array.from({length:document.numPages},(_,i)=>cached.get(i+1)??pending(i+1));
+        const scans:{index:number;cachedPage:ExtractedPage;text:string}[]=[];
         for(const [index,cachedPage] of record.pages.entries()){
           signal.throwIfAborted();
           if(isTrusted(cachedPage)||cachedPage.status!=='pending'&&!retry)continue;
           const number=index+1;
-          publish('Reading '+label(number));
           let page:PDFPageProxy|undefined;
-          let text='';
-          try {
+          let text='',nativeCover=false;
+          const started=now();
+          try{
             page=await abortable(document.getPage(number),signal,stop);
-            const textStarted=now();
-            try {text=formatPageText(await nativeText(page,signal),item.kind);}
-            catch {signal.throwIfAborted();}
-            finally{browserTiming('study:pdf-text',textStarted);}
-            const quality=pageQuality(text,item.kind);
-            if(quality.status==='extracted') {
-              record.pages[index]={number,text,status:'extracted',method:'pdf-text',questions:quality.questions,reason:''};
-              continue;
+            if(cachedPage.method!=='ocr')text=formatPageText(await nativeText(page,signal),item.kind);
+            const native=pageQuality(text,item.kind);
+            if(item.kind==='Past paper'&&!native.questions&&pageQuality(text,'Notes').status==='extracted'&&
+              /\b(?:instructions(?: to candidates)?|time allowed|maximum marks|end[- ]?sem(?:ester)?|examination)\b/i.test(text)){
+              const operators=await abortable(page.getOperatorList(),signal);
+              nativeCover=!operators.fnArray.some(operator=>rasterOperations.has(operator));
             }
-            ocr??=await (await import('./ocr')).createOcr(signal);
-            const scanStarted=now();
-            const result=await ocr.read(page,item.kind,Boolean(retry),pass=>publish('Scanning '+label(number)+' · pass '+pass))
-              .finally(()=>browserTiming('study:ocr',scanStarted));
-            const previous=cachedPage.text&&cachedPage.method==='ocr'
-              ?{text:cachedPage.text,confidence:cachedPage.confidence??null,variant:'prior pass'}:null;
-            const reading=result.best?chooseReading(previous,result.best,item.kind):previous;
-            const useOcr=reading?.text && (pageQuality(reading.text,item.kind,reading.confidence).score>quality.score||!text);
-            const best=useOcr?reading.text:text;
-            const confidence=useOcr?reading.confidence:null;
-            const rated=pageQuality(best,item.kind,confidence);
-            record.pages[index]={number,text:best,status:rated.status,method:'ocr',
-              questions:rated.status==='extracted'?countSupportedOcrQuestions(best,item.kind==='Past paper'):rated.questions,reason:rated.reason,
-              ...(confidence!==null?{confidence}:{}),dpi:result.dpi,rotation:result.rotation,
-              attempts:[...cachedPage.attempts??[],...result.attempts.map(({confidence,variant})=>({confidence,variant}))].slice(-16)};
-          } catch {
-            signal.throwIfAborted();
-            await ocr?.close().catch(()=>{});
-            ocr=undefined;
-            const retained=text||cachedPage.text;
-            record.pages[index]={...cachedPage,text:retained,status:retained?'review':'failed',method:'ocr',
-              questions:pageQuality(retained,item.kind).questions,reason:'This attempt could not read the page reliably. Compare it with the original or retry.'};
-          } finally {
-            page?.cleanup();
-            publish('Processed '+label(number));
-            if(number%3===0)await new Promise<void>(resolve=>setTimeout(resolve,0));
-          }
+          }catch{signal.throwIfAborted();}
+          finally{page?.cleanup();browserTiming('study:pdf-text',started);}
+          const quality=pageQuality(text,item.kind);
+          if(quality.status==='extracted'||nativeCover){
+            record.pages[index]={number,text,status:'extracted',method:'pdf-text',questions:quality.questions,reason:''};
+          }else scans.push({index,cachedPage,text});
         }
+        publish('Read text layers in '+label());
+        const memory=(navigator as Navigator&{deviceMemory?:number}).deviceMemory??0;
+        const parallel=scans.length>=4&&memory>=8&&navigator.hardwareConcurrency>=8?2:1;
+        let nextPage=0;
+        const scanned=await Promise.allSettled(Array.from({length:parallel},async(_,slot)=>{
+          while(nextPage<scans.length){
+            signal.throwIfAborted();
+            const {index,cachedPage,text}=scans[nextPage++];
+            const number=index+1;
+            let page:PDFPageProxy|undefined;
+            try{
+              page=await abortable(document.getPage(number),signal,stop);
+              publish('Scanning '+label(number));
+              const ocr=await workerFor(slot);
+              const started=now();
+              const result=await ocr.read(page,item.kind,Boolean(retry),pass=>publish('Scanning '+label(number)+' · pass '+pass))
+                .finally(()=>browserTiming('study:ocr',started));
+              if(result.interrupted)await releaseWorker(slot);
+              const previous=cachedPage.text&&cachedPage.method==='ocr'
+                ?{text:cachedPage.text,confidence:cachedPage.confidence??null,variant:'prior pass'}:null;
+              const reading=result.best?chooseReading(previous,result.best,item.kind):previous;
+              const quality=pageQuality(text,item.kind);
+              const useOcr=reading?.text&&(pageQuality(reading.text,item.kind,reading.confidence).score>quality.score||!text);
+              const best=useOcr?reading.text:text;
+              const confidence=useOcr?reading.confidence:null;
+              const rated=pageQuality(best,item.kind,confidence);
+              if(useOcr&&result.unconfirmed&&reading===result.best&&rated.status==='extracted'){
+                rated.status='review';
+                rated.reason='Only a preliminary scan was readable. Check it against the original page.';
+              }
+              record.pages[index]={number,text:best,status:rated.status,method:'ocr',
+                questions:rated.status==='extracted'?countSupportedOcrQuestions(best,item.kind==='Past paper'):rated.questions,
+                reason:rated.reason,...(confidence!==null?{confidence}:{}),dpi:result.dpi,rotation:result.rotation,
+                attempts:[...cachedPage.attempts??[],...result.attempts.map(({confidence,variant})=>({confidence,variant}))].slice(-16)};
+            }catch{
+              signal.throwIfAborted();
+              await releaseWorker(slot);
+              const retained=text||cachedPage.text;
+              record.pages[index]={...cachedPage,text:retained,status:retained?'review':'failed',method:'ocr',
+                questions:pageQuality(retained,item.kind).questions,reason:'This attempt could not read the page reliably. Compare it with the original or retry.'};
+            }finally{
+              page?.cleanup();
+              publish('Processed '+label(number));
+            }
+          }
+        }));
+        const failure=scanned.find(result=>result.status==='rejected');
+        if(failure)throw failure.reason;
         remember();
       }catch {
         signal.throwIfAborted();
@@ -194,7 +238,7 @@ export async function extractDocuments(files:readonly Material[],options:Prepare
     }
     return records;
   }finally{
-    await ocr?.close().catch(()=>{});
+    await Promise.all([...workers.keys()].map(releaseWorker));
     browserTiming('study:attachments',extractionStarted);
   }
 }

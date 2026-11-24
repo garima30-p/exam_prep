@@ -7,15 +7,16 @@ import type { Material } from './api';
 
 const mock=vi.hoisted(()=>({
   cleanup:vi.fn(),destroy:vi.fn(async()=>{}),close:vi.fn(async()=>{}),
-  read:vi.fn(),readImage:vi.fn(),native:new Set<number>(),rotation:90
+  read:vi.fn(),readImage:vi.fn(),native:new Set<number>(),covers:new Set<number>(),rotation:90
 }));
 vi.mock('pdfjs-dist',()=>({
-  GlobalWorkerOptions:{},
+  GlobalWorkerOptions:{},OPS:{paintImageXObject:85},
   Util:{transform:(_viewport:number[],transform:number[])=>transform},
   getDocument:({data}:{data:ArrayBuffer})=>({
     promise:Promise.resolve({numPages:new Uint8Array(data)[0],async getPage(number:number){
       return {number,rotate:mock.rotation,cleanup:mock.cleanup,getViewport:()=>({transform:[1,0,0,1,0,0]}),
-        getTextContent:async()=>({items:mock.native.has(number)?[{str:'Explain the role of virtual memory in modern systems.',transform:[10,0,0,10,15,40],width:100,hasEOL:true}]:[]})};
+        getOperatorList:async()=>({fnArray:[]}),
+        getTextContent:async()=>({items:mock.native.has(number)?[{str:mock.covers.has(number)?'End Semester Examination. Time allowed is three hours. Read these instructions before starting the paper.':'Explain the role of virtual memory in modern systems.',transform:[10,0,0,10,15,40],width:100,hasEOL:true}]:[]})};
     }}),
     destroy:mock.destroy
   })
@@ -58,7 +59,7 @@ it('processes more than six pages across two documents in sequence, skips OCR fo
   expect(rotations).toEqual(Array(8).fill(90));
   expect(records.every(documentComplete)).toBe(true);
   expect(records[0].pages[0].method).toBe('pdf-text');
-  expect(mock.cleanup).toHaveBeenCalledTimes(10);
+  expect(mock.cleanup).toHaveBeenCalledTimes(18);
   expect(mock.close).toHaveBeenCalledTimes(1);
   expect(control.onUpdate).toHaveBeenCalled();
   await extractDocuments(files,{...control,records});
@@ -90,7 +91,7 @@ it('cancels processing, releases the worker and page, and leaves later pages pen
   });
   await expect(extractDocuments([item(1,4)],run)).rejects.toMatchObject({name:'AbortError'});
   expect(mock.read).toHaveBeenCalledTimes(1);
-  expect(mock.cleanup).toHaveBeenCalledTimes(2);
+  expect(mock.cleanup).toHaveBeenCalledTimes(5);
   expect(mock.destroy).toHaveBeenCalledTimes(1);
   expect(mock.close).toHaveBeenCalledTimes(1);
   const calls=vi.mocked(run.onUpdate).mock.calls;
@@ -110,4 +111,27 @@ it('reuses OCR for identical file bytes with a new attachment ID and preserves t
     expect(second[0]).toMatchObject({id:32,name:'paper32.pdf',pages:first[0].pages});
     expect(documentComplete(second[0])).toBe(true);
   }finally{vi.stubGlobal('crypto',previous);}
+});
+
+it('publishes a trusted later text layer before scanning the first page',async()=>{
+  mock.native=new Set([2]);mock.read.mockReset();mock.close.mockClear();
+  const control=options();
+  mock.read.mockImplementation(async(page:{number:number})=>{
+    expect(vi.mocked(control.onUpdate).mock.calls.some(([update])=>
+      update.documents[0].pages[1]?.method==='pdf-text'&&update.documents[0].pages[0]?.status==='pending')).toBe(true);
+    return reading(page.number);
+  });
+  const [record]=await extractDocuments([item(41,5)],control);
+  expect(record.pages.map(page=>page.method)).toEqual(['ocr','pdf-text','ocr','ocr','ocr']);
+  expect(mock.close).toHaveBeenCalledTimes(1);
+});
+
+
+it('keeps a reliable text-only exam cover page without trying OCR',async()=>{
+  mock.native=new Set([1]);mock.covers=new Set([1]);mock.read.mockReset();
+  try{
+    const [record]=await extractDocuments([item(51,1)],options());
+    expect(record.pages[0]).toMatchObject({method:'pdf-text',status:'extracted',questions:0});
+    expect(mock.read).not.toHaveBeenCalled();
+  }finally{mock.covers.clear();}
 });

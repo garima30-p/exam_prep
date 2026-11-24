@@ -56,6 +56,6 @@ it('classifies from trusted content and keeps learner overrides',()=>{
   const result=inspectStudyInput(documents,files);
   expect(result.files.map(file=>file.kind)).toEqual(['Syllabus','Past paper','Administrative','Unreadable']);
   expect(result.subject).toBe('Operating systems');
-  expect(result.topics).toEqual(['CPU scheduling','Deadlock prevention']);
+  expect(result.outline.map(topic=>topic.title)).toEqual(['CPU scheduling','Deadlock prevention']);
   expect(inspectStudyInput(documents,[{...files[1],kind:'Notes',kindOverride:true}]).files[0].kind).toBe('Notes');
 });

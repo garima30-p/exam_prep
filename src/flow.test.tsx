@@ -40,7 +40,9 @@ it('teaches a recognized exam subject immediately and caches each learning depth
   const analyze=vi.fn<ExamApi['analyze']>(async()=>({questions:[],warnings:[]}));
   const requests:{task?:string;learningMode?:string;minutes?:number;topic?:string}[]=[];
   vi.stubGlobal('fetch',vi.fn(async(_url,init)=>{
-    requests.push(JSON.parse(init.body));
+    const request=JSON.parse(init.body);
+    requests.push(request);
+    if(request.task==='outline')return Response.json({topics:[{title:'Process Management',group:''}]});
     return Response.json({explanation:'A process is a program that is being executed. The kernel manages resources.',sources:[]});
   }));
   const button=(name:string)=>Array.from(host.querySelectorAll('button')).find(button=>button.textContent===name)!;
@@ -59,6 +61,11 @@ it('teaches a recognized exam subject immediately and caches each learning depth
     expect(analyze.mock.calls[0][3]?.learning).toBe(true);
     expect(requests.filter(request=>request.task==='notes')).toMatchObject([{learningMode:'last-minute',topic:'Operating Systems'}]);
     expect(requests.find(request=>request.task==='notes')).not.toHaveProperty('minutes');
+    await act(async()=>{
+      const dialog=host.querySelector<HTMLDialogElement>('#topic-map-title')?.closest('dialog');
+      if(dialog)dialog.showModal=vi.fn();
+      button('Next topic →').click();
+    });
     await act(async()=>button('Next topic →').click());
     expect([...host.querySelectorAll('.learning-notes h2')].map(h=>h.textContent)).toEqual(['Operating Systems','Process Management']);
     await act(async()=>button('Study').click());
