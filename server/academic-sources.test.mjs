@@ -134,3 +134,109 @@ it('infers an explicitly provisional hierarchy when published material is unavai
  ]);
  expect(run).toHaveBeenCalledTimes(1);
 });
+const synchronizationUrl='https://www.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/5_Synchronization.html';
+const passage='Mutual exclusion ensures that only one process at a time can execute in a critical section.';
+const unrelated='This course syllabus lists operating systems and critical section topics.';
+const synchronizeInput={task:'chat',mode:'auto',subject:'Operating Systems',academicGrounding:true,
+ request:'Explain why mutual exclusion is necessary.'};
+
+it('retrieves relevant conceptual evidence on a fresh session and preserves the exact web citation',async()=>{
+ const provider=vi.fn(async()=>Response.json({results:[
+  {url:'https://example.com/operating-systems',title:'Operating Systems',content:passage},
+  {url:'https://www.cs.uic.edu/syllabus-test',title:'Critical Section Syllabus',content:unrelated.replace('lists','lists and schedules')},
+  {url:synchronizationUrl,title:'Operating Systems: Process Synchronization',content:passage},
+ ]}));
+ vi.stubGlobal('fetch',provider);
+ const run=vi.fn(async()=>({response:{insufficientEvidence:false,sections:[
+  {text:passage,citations:[{id:'W1',quote:passage}]},
+  {text:'Every mutex always guarantees fairness and a fixed execution time.',citations:[]},
+ ]}}));
+ const env={STUDY_AI_ENABLED:'true',AI:{run},TAVILY_API_KEY:'test-key',
+  STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:async()=>budget()})}};
+ const response=await handle(post(synchronizeInput),env);
+ expect(response.status).toBe(200);
+ expect(await response.json()).toMatchObject({evidenceStatus:'partially_source_backed',sourceVerified:false,
+  citationMap:[{section:1,sourceIds:['W1']}],webSearch:{attempted:true,providerStatus:200,providerResultCount:3,relevantCount:1},
+  retrievalDiagnostics:{webEvidenceUsed:1},sources:[{url:synchronizationUrl,retrievedBy:'tavily',publisher:'University of Illinois Chicago',supportingQuote:passage}]});
+ const model=run.mock.calls[0][1].messages[0].content;
+ expect(model).toContain(passage);
+ expect(model).not.toContain(unrelated);
+});
+
+it('uses explicit web evidence alongside notes without querying unrelated institutional scope',async()=>{
+ const provider=vi.fn(async()=>Response.json({results:[
+  {url:synchronizationUrl,title:'Operating Systems: Process Synchronization',content:passage},
+ ]}));
+ vi.stubGlobal('fetch',provider);
+ const note='A critical section protects code that accesses shared state. Mutual exclusion ensures one process enters at a time.';
+ const run=vi.fn(async()=>({response:{insufficientEvidence:false,sections:[
+  {text:passage,citations:[{id:'W1',quote:passage}]},
+  {text:note,citations:[{id:'N1',quote:note}]},
+ ]}}));
+ const env={STUDY_AI_ENABLED:'true',AI:{run},TAVILY_API_KEY:'test-key',
+  STUDY_BUDGET:{idFromName:()=>1,get:()=>({fetch:async()=>budget()})}};
+ const response=await handle(post({...synchronizeInput,request:'Explain critical section rules with academic web sources.',
+  university:'Graphic Era Hill University',sources:[{file:'Course notes.pdf',page:2,excerpt:note,documentType:'Notes'}]}),env);
+ expect(response.status).toBe(200);
+ expect(await response.json()).toMatchObject({retrievalDiagnostics:{webEvidenceUsed:1},sources:[
+  {kind:'web',url:synchronizationUrl},{kind:'uploaded',file:'Course notes.pdf',page:2},
+ ]});
+ const [url,request]=provider.mock.calls[0];
+ expect(url).toBe('https://api.tavily.com/search');
+ expect(JSON.parse(request.body).query).toContain('critical section');
+ expect(JSON.parse(request.body)).not.toHaveProperty('include_domains');
+ expect(provider).toHaveBeenCalledOnce();
+});
+
+it('keeps Coffman conditions in deadlock practice even when its framing mentions synchronization',async()=>{
+ const run=vi.fn(async()=>({response:{questions:[
+  {question:'Describe deadlock as it relates to process synchronization. What four necessary conditions must hold?'},
+  {question:'Explain how semaphores help enforce mutual exclusion during process synchronization.'},
+ ]}}));
+ const response=await handle(post({task:'practiceBatch',topic:'Process Synchronization',subject:'Operating Systems',count:1}),
+  {STUDY_AI_ENABLED:'true',AI:{run}});
+ expect(response.status).toBe(200);
+ expect((await response.json()).questions).toEqual([{prompt:'Explain how semaphores help enforce mutual exclusion during process synchronization.'}]);
+});
+
+it('allows one authenticated fresh Tavily probe within the global budget and reuses only its matching evidence',async()=>{
+ const key='test-credential-holder-only-123456789';
+ const guest='198.51.100.7';
+ const quote='Process synchronization protects shared data. Mutual exclusion ensures only one process enters the critical section at a time.';
+ const url='https://www.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/5_Synchronization.html';
+ const env={STUDY_AI_ENABLED:'true',TAVILY_API_KEY:'test-tavily-secret',
+  STUDY_AI_DIAGNOSTIC_TOKEN:key,AI:{run:vi.fn(async()=>({response:{insufficientEvidence:false,sections:[{text:quote,citations:[{id:'W1',quote}]}]}}))}};
+ const {StudyBudget}=await import('./study-ai.mjs');
+ const entries=new Map();
+ const budget=new StudyBudget({storage:{transaction:fn=>fn({get:async k=>entries.get(k),put:async(k,v)=>entries.set(k,v)})}});
+ env.STUDY_BUDGET={idFromName:()=>1,get:()=>({fetch:(url,init)=>budget.fetch(new Request(url,init))})};
+ const request=(route,body,auth)=>new Request('https://example.test/api/coach'+route,{method:'POST',
+  headers:{'Content-Type':'application/json','CF-Connecting-IP':guest,...(auth?{Authorization:'Bearer '+auth}:{})},body:body&&JSON.stringify(body)});
+ const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(guest));
+ const guestId=Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');
+ for(let i=0;i<3;i++)await budget.fetch(new Request('https://budget.internal/',{method:'POST',body:JSON.stringify({guest:guestId,kind:'search'})}));
+ const fetcher=vi.fn(async(input,init)=>{
+  expect(input).toBe('https://api.tavily.com/search');
+  expect(JSON.parse(init.body).query).toMatch(/operating systems.*process synchronization/);
+  return Response.json({results:[{url,title:'Operating Systems: Process Synchronization',content:quote}]});
+ });
+ vi.stubGlobal('fetch',fetcher);
+ const noAuth=await handle(request('/search-diagnostic'),env);
+ expect(noAuth.status).toBe(404);
+ expect(fetcher).not.toHaveBeenCalled();
+ const result=await handle(request('/search-diagnostic',undefined,key),env);
+ expect(result.status).toBe(200);
+ expect(await result.json()).toMatchObject({ok:true,configuration:{runtimeKeyPresent:true,budgetBindingPresent:true},
+  webSearch:{attempted:true,providerStatus:200,quota:{guest:{used:3,max:3},global:{used:4,max:10},diagnostic:{used:1,max:1}}},
+  retrievalDiagnostics:{tavilyEvidenceUsed:1},sources:[{url,supportingQuote:quote,retrievedBy:'tavily'}]});
+ expect(env.AI.run.mock.calls[0][1].messages[0].content).toContain(quote);
+ const repeat=await handle(request('/search-diagnostic',undefined,key),env);
+ expect(repeat.status).toBe(429);
+ expect(await repeat.json()).toMatchObject({ok:false,webSearch:{attempted:false,providerStatus:null,quota:{blockedBy:['diagnostic_daily']}}});
+ const ordinary=await handle(request('',{mode:'auto',task:'chat',academicGrounding:true,subject:'Operating Systems',
+  request:'Explain process synchronization and mutual exclusion in operating systems.'}),env);
+ expect(await ordinary.json()).toMatchObject({webSearch:{cached:true,attempted:false},sources:[{url,supportingQuote:quote}]});
+ const status=await handle(request('/search-quota',undefined,key),env);
+ expect(await status.json()).toMatchObject({quota:{blockedBy:['guest_daily'],guest:{used:3,max:3},global:{used:4,max:10},diagnostic:{used:1,max:1}}});
+ expect(fetcher).toHaveBeenCalledOnce();
+});

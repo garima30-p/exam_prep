@@ -1,5 +1,5 @@
 import { now, elapsed, serverTiming } from './performance.mjs';
-import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, diagnoseSearchQuota, generateStudyReply, webSearchStatus } from './study-ai.mjs';
+import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, diagnoseSearchQuota, diagnoseTavily, generateStudyReply, webSearchStatus } from './study-ai.mjs';
 import { administrativeLine, parseSyllabus, syllabusAdministrative, syllabusUnit } from './study-material.mjs';
 import { describeLearning, makeLearningPlan } from './learning.mjs';
 import { exactQuestionKey } from './semantic.mjs';
@@ -250,6 +250,7 @@ export async function handle(request,env) {
   const path=new URL(request.url).pathname;
   if(path==='/api/coach/diagnostic')return diagnoseGemma(request,env);
   if(path==='/api/coach/search-quota')return diagnoseSearchQuota(request,env);
+  if(path==='/api/coach/search-diagnostic')return finish(await diagnoseTavily(request,env,metrics));
   if(path==='/api/coach/status'&&request.method==='GET'){
     const code=aiStatus(env);
     const webSearch=webSearchStatus(env);

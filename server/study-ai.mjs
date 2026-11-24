@@ -47,6 +47,7 @@ const searchCache=new Map();
 // Basic search uses one credit. Even 31 days at this ceiling use at most 930
 // credits from this Worker. Provider limits still apply across the account.
 const MAX_GLOBAL_SEARCHES_PER_DAY=30;
+const MAX_DIAGNOSTIC_SEARCHES_PER_DAY=1;
 function dailyLimit(value,defaultLimit,max){
  const configured=typeof value==='string'&&/^\d+$/.test(value)?Number(value):value;
  return Number.isSafeInteger(configured)&&configured>0?Math.min(configured,max):Math.min(defaultLimit,max);
@@ -60,25 +61,29 @@ export class StudyBudget {
  }
  async fetch(request){
   const {guest,kind}=await request.json();
-  if(!['search','status'].includes(kind)||typeof guest!=='string'||!/^[a-f0-9]{64}$/.test(guest))return json({},400);
+  if(!['search','status','diagnostic'].includes(kind)||typeof guest!=='string'||!/^[a-f0-9]{64}$/.test(guest))return json({},400);
   const day=new Date().toISOString().slice(0,10);
   const resetAt=new Date(Date.parse(day)+86_400_000).toISOString();
   const snapshot=await this.state.storage.transaction(async tx=>{
    const previous=await tx.get('usage');
    const usage=previous?.day===day?previous:{day,search:0,guests:{}};
    const usedByGuest=usage.guests[guest]?.search??0;
+   const diagnostic=kind==='diagnostic';
+   const diagnosticUsed=usage.diagnostic??0;
    const blockedBy=[];
-   if(usedByGuest>=this.guestLimit)blockedBy.push('guest_daily');
+   if(!diagnostic&&usedByGuest>=this.guestLimit)blockedBy.push('guest_daily');
    if(usage.search>=this.globalLimit)blockedBy.push('global_daily');
+   if(diagnostic&&diagnosticUsed>=MAX_DIAGNOSTIC_SEARCHES_PER_DAY)blockedBy.push('diagnostic_daily');
    const allowed=blockedBy.length===0;
-   const reserved=kind==='search'&&allowed?1:0;
+   const reserved=kind!=='status'&&allowed?1:0;
    if(reserved){
-    usage.guests[guest]={search:usedByGuest+1};
-    await tx.put('usage',{day,search:usage.search+1,guests:usage.guests});
+    if(!diagnostic)usage.guests[guest]={search:usedByGuest+1};
+    await tx.put('usage',{day,search:usage.search+1,guests:usage.guests,diagnostic:diagnosticUsed+(diagnostic?1:0)});
    }
    return {allowed,blockedBy,day,resetAt,
-    guest:{used:usedByGuest+reserved,max:this.guestLimit},
-    global:{used:usage.search+reserved,max:this.globalLimit}};
+    guest:{used:usedByGuest+(diagnostic?0:reserved),max:this.guestLimit},
+    global:{used:usage.search+reserved,max:this.globalLimit},
+    ...(kind!=='search'?{diagnostic:{used:diagnosticUsed+(diagnostic?reserved:0),max:MAX_DIAGNOSTIC_SEARCHES_PER_DAY}}:{})};
   });
   return json(snapshot);
  }
@@ -219,8 +224,25 @@ export async function diagnoseSearchQuota(request,env){
  if(request.method!=='POST'||!await authorized(request,env?.STUDY_AI_DIAGNOSTIC_TOKEN))return json({error:'Endpoint not found.'},404);
  try{
   const budget=await searchBudget(env,await guestKey(request),'status');
-  return json({provider:'tavily',quota:budget,providerContacted:false});
+  return json({provider:'tavily',quota:budget,providerContacted:false,configuration:webSearchStatus(env)});
  }catch{return json({error:'The search quota could not be read.',code:'web_quota_unavailable'},503);}
+}
+
+export async function diagnoseTavily(request,env,metrics){
+ if(request.method!=='POST'||!await authorized(request,env?.STUDY_AI_DIAGNOSTIC_TOKEN))return json({error:'Endpoint not found.'},404);
+ const webSearch=webSearchStatus(env);
+ const configuration={runtimeKeyPresent:webSearch!=='web_not_configured',budgetBindingPresent:
+  typeof env?.STUDY_BUDGET?.get==='function'&&typeof env?.STUDY_BUDGET?.idFromName==='function',webSearch};
+ if(!coachEnabled(env))return json({ok:false,configuration,code:aiStatus(env)},503);
+ const input={task:'chat',mode:'auto',academicGrounding:true,subject:'Operating Systems',
+  request:'Explain process synchronization and mutual exclusion in operating systems.'};
+ try{
+  const reply=await generateStudyReply(input,env,request,metrics,{tavilyDiagnostic:true});
+  const result=await reply.json();
+  const ok=reply.ok&&result.webSearch?.attempted===true&&result.webSearch.providerStatus===200&&
+   result.retrievalDiagnostics?.tavilyEvidenceUsed>0;
+  return json({...result,configuration,ok},ok?200:reply.ok?502:reply.status);
+ }catch{return json({ok:false,configuration,code:'request_failed'},502);}
 }
 
 const webErrors={
@@ -242,10 +264,11 @@ export function webSearchStatus(env){
 }
 
 const searchesInFlight=new Map();
-async function retrieveWeb(publicTopic,env,request,requestId,policy=null,metrics=[]){
+async function retrieveWeb(publicTopic,env,request,requestId,policy=null,metrics=[],diagnostic=false){
  const started=now();
  const complete=(code,sources=[],providerStatus=null,cached=false,budget=null,providerResultCount=null)=>{
-  const quota=budget?{blockedBy:budget.blockedBy,resetAt:budget.resetAt}:undefined;
+  const quota=budget?{blockedBy:budget.blockedBy,resetAt:budget.resetAt,
+   ...(diagnostic?{guest:budget.guest,global:budget.global,diagnostic:budget.diagnostic}:{})}:undefined;
   const webSearch={provider:'tavily',code,providerStatus,cached,providerResultCount,attempted:providerStatus!==null||code==='web_provider_failed',relevantCount:sources.length,sourceCount:sources.length,...(quota?{quota}:{})};
   console.info('study_web_search',JSON.stringify({requestId,...webSearch,...(budget?{quota:budget}:{})}));
   metrics.push([cached?'web-cache':'web-retrieval',elapsed(started)]);
@@ -255,14 +278,14 @@ async function retrieveWeb(publicTopic,env,request,requestId,policy=null,metrics
  const config=webSearchStatus(env);
  const query=clean(publicTopic,policy?225:100).replace(/[^\p{L}\p{N} .()+-]/gu,'').trim();
  if(!query)return complete(config==='ready'?'web_topic_required':config);
- const key=JSON.stringify([query.toLowerCase(),policy?.scope?.domain??null,Boolean(policy?.course),Boolean(policy),
+ const key=JSON.stringify([query.toLowerCase(),policy?.scope?.domain??null,Boolean(policy?.course),Boolean(policy?.conceptual),Boolean(policy),
   policy?.subject?.toLowerCase()??'',policy?.topic?.toLowerCase()??'']);
  const memory=()=>searchCache.get(key);
  const cached=memory();
  const reuse=hit=>complete(hit.sources.length?'ok':'web_no_results',hit.sources,null,true,null,hit.providerResultCount);
- if(cached&&cached.until>Date.now())return reuse(cached);
+ if(!diagnostic&&cached&&cached.until>Date.now())return reuse(cached);
  const pending=searchesInFlight.get(key);
- if(pending&&config==='ready'){
+ if(!diagnostic&&pending&&config==='ready'){
   const shared=await pending;
   const hit=memory();
   if(hit&&hit.until>Date.now())return reuse(hit);
@@ -278,17 +301,17 @@ async function retrieveWeb(publicTopic,env,request,requestId,policy=null,metrics
    try {
     const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(key));
     const id=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
-    cacheRequest=new Request(new URL('/__academic_source_cache/v1/'+id,request.url));
-    const response=await edge.match(cacheRequest);
+    cacheRequest=new Request(new URL('/__academic_source_cache/v2/'+id,request.url));
+    const response=diagnostic?null:await edge.match(cacheRequest);
     const hit=await response?.json();
     if(hit&&hit.until>Date.now()&&Array.isArray(hit.sources)&&hit.sources.length)return reuse(hit);
    }catch{/* An unavailable cache leaves quota checks and retrieval active. */}
   }
   if(config!=='ready')return complete(config);
-  const reply=await searchProvider(query,env,request,policy,complete,metrics);
+  const reply=await searchProvider(query,env,request,policy,complete,metrics,diagnostic);
   const count=reply.webSearch.providerResultCount;
   const hit=count===null?null:{sources:reply.sources,providerResultCount:count,until:Date.now()+900_000};
-  if(hit){
+  if(hit&&(!diagnostic||hit.sources.length)){
    if(searchCache.size>=50)searchCache.delete(searchCache.keys().next().value);
    searchCache.set(key,hit);
   }
@@ -296,63 +319,68 @@ async function retrieveWeb(publicTopic,env,request,requestId,policy=null,metrics
    try{await edge.put(cacheRequest,Response.json(hit,{headers:{'Cache-Control':'public, max-age=900'}}));}catch{}
   }
   return reply;
- })().finally(()=>searchesInFlight.delete(key));
- searchesInFlight.set(key,operation);
- return operation;
+ })();
+ if(diagnostic)return operation;
+ const shared=operation.finally(()=>searchesInFlight.delete(key));
+ searchesInFlight.set(key,shared);
+ return shared;
 }
 
-async function searchProvider(query,env,request,policy,complete,metrics){
+async function searchProvider(query,env,request,policy,complete,metrics,diagnostic){
+ let budget;
  try{
-  const budget=await searchBudget(env,await guestKey(request));
+  budget=await searchBudget(env,await guestKey(request),diagnostic?'diagnostic':'search');
   if(!budget.allowed)return complete('web_usage_limit',[],null,false,budget);
  }catch{return complete('web_quota_unavailable');}
 
+ const finished=(code,sources=[],status=null,count=null)=>complete(code,sources,status,false,diagnostic?budget:null,count);
  let providerStatus=null;
  try{
   const providerStarted=now();
   const response=await fetch('https://api.tavily.com/search',{method:'POST',redirect:'manual',signal:AbortSignal.timeout(7500),
    headers:{Authorization:'Bearer '+env.TAVILY_API_KEY.trim(),'Content-Type':'application/json'},
-   body:JSON.stringify({query,search_depth:'basic',auto_parameters:false,max_results:policy?.scope?.domain?5:3,include_answer:false,include_raw_content:policy?.course?'text':false,...(policy?.scope?.domain?{include_domains:[policy.scope.domain]}:{})})});
+   body:JSON.stringify({query,search_depth:'basic',auto_parameters:false,max_results:policy?5:3,include_answer:false,include_raw_content:policy?.course?'text':false,...(policy?.scope?.domain?{include_domains:[policy.scope.domain]}:{})})});
   metrics.push(['tavily',elapsed(providerStarted)]);
   providerStatus=response.status;
   if(!response.ok){
    const code=({401:'web_auth_failed',403:'web_auth_failed',429:'web_provider_rate_limit',
     432:'web_provider_credit_limit',433:'web_provider_spending_limit'})[providerStatus]??'web_provider_failed';
-   return complete(code,[],providerStatus);
+   return finished(code,[],providerStatus);
   }
   const extractionStarted=now();
   const data=await response.json();
-  if(!Array.isArray(data.results))return complete('web_provider_failed',[],providerStatus);
+  if(!Array.isArray(data.results))return finished('web_provider_failed',[],providerStatus);
   const sources=[];
   for(const result of data.results.slice(0,5)){
    if(sources.length===3)break;
    if(policy){
     const inspected=academicResult(result,policy);
-    if(inspected&&!sources.some(source=>source.url===inspected.url))sources.push({...inspected,id:'W'+(sources.length+1)});
+    if(inspected&&!sources.some(source=>source.url===inspected.url))sources.push({...inspected,id:'W'+(sources.length+1),retrievedBy:'tavily'});
     continue;
    }
    try{
     const url=new URL(result.url);
     const excerpt=clean(result.content,650);
     if(url.protocol!=='https:'||url.username||url.password||!excerpt||sources.some(source=>source.url===url.href))continue;
-    sources.push({id:'W'+(sources.length+1),kind:'web',url:url.href,title:clean(result.title,160)||url.hostname,excerpt});
+    sources.push({id:'W'+(sources.length+1),kind:'web',url:url.href,title:clean(result.title,160)||url.hostname,publisher:url.hostname,excerpt,retrievedBy:'tavily'});
    }catch{}
   }
   metrics.push(['source-extraction',elapsed(extractionStarted)]);
-  if(!sources.length&&!policy)return complete('web_no_results',[],providerStatus);
-  return complete(sources.length?'ok':'web_no_results',sources,providerStatus,false,null,data.results.length);
- }catch{return complete('web_provider_failed',[],providerStatus);}
+  return finished(sources.length?'ok':'web_no_results',sources,providerStatus,data.results.length);
+ }catch{return finished('web_provider_failed',[],providerStatus);}
 }
 
 const assignWebIds=sources=>sources.slice(0,4).map((source,index)=>({...source,id:'W'+(index+1)}));
-async function academicReferences(input,env,request,requestId,{course=false,fallback=false,curriculum=false,metrics=[]}={}){
+async function academicReferences(input,env,request,requestId,{course=false,fallback=false,curriculum=false,metrics=[],diagnostic=false}={}){
  const subject=clean(input.subject,100);
  const topic=course?'':clean(input.topic,100);
  const scope=academicScope(input.university);
- const query=academicQuery(scope,subject,'',true);
+ // An institutional syllabus lookup establishes scope. A teaching request needs a topic-specific passage.
+ const conceptSearch=fallback&&!course&&!curriculum;
+ const query=conceptSearch?'':academicQuery(scope,subject,'',true);
  const started=now();
  const [published,retrieved]=await Promise.all([
-  (!topic||scope.named||curriculum||!publicStudyConcepts(topic).length)?publishedCourse(scope,subject,topic):[],
+  (!conceptSearch||!topic)?publishedCourse(scope,subject,topic):[],
   query?retrieveWeb(query,env,request,requestId,{scope,subject,topic:'',course:true},metrics):null
  ]);
  metrics.push(['syllabus',elapsed(started)]);
@@ -364,10 +392,11 @@ async function academicReferences(input,env,request,requestId,{course=false,fall
   references.some(source=>source.category==='academic-reference'&&source.status!=='page-inspected'))){
   const query=summarySearchTopic(subject,[topic]);
   if(query){
-   search=await retrieveWeb(curriculum?query+' university course syllabus':query,env,request,requestId,{subject,topic,course:curriculum},metrics);
-   references=unique([...references,...search.sources]);
+   search=await retrieveWeb(curriculum?query+' university course syllabus':query.replace(/study guide$/,'course notes'),
+    env,request,requestId,{subject,topic,course:curriculum,conceptual:conceptSearch},metrics,diagnostic);
+   references=unique(conceptSearch?[...search.sources,...references]:[...references,...search.sources]);
   }
-  if(!curriculum&&!references.some(source=>source.category==='academic-reference'&&(source.status!=='page-inspected'||source.role==='conceptual'))){
+  if(!diagnostic&&!curriculum&&!references.some(source=>source.category==='academic-reference'&&(source.status!=='page-inspected'||source.role==='conceptual'))){
    const start=now();
    references=unique([...references,...await conceptualReferences(subject,topic)]);
    metrics.push(['conceptual-reference',elapsed(start)]);
@@ -417,6 +446,10 @@ function suitablePracticeQuestion(prompt,topic,subject){
  const expected=studySubject(subject);
  const subjectOverview=topicKey(topic)===topicKey(subject)||Boolean(expected)&&studySubject(topic)===expected&&publicStudyConcepts(topic).length===0;
  const focus=publicStudyConcepts(topic);
+ // A reference to synchronization in the framing does not make a deadlock conditions exercise a synchronization question.
+ if(focus.includes('process synchronization')&&!focus.includes('deadlock')&&
+   /\bdeadlocks?\b/i.test(prompt)&&/\b(?:Coffman|(?:four |necessary )conditions)\b/i.test(prompt)&&
+   !/\b(?:critical section|semaphores?|mutex|bounded waiting|race condition)\b/i.test(prompt))return false;
  const words=[...terms(topic)].filter(word=>!['introduction','advanced','basic','fundamental','concepts'].includes(word));
  const matchesFocus=focus.some(concept=>publicStudyConcepts(prompt).includes(concept))||
   words.some(word=>new RegExp('\\b'+word.replace(/(?<!s)s$/,'')+'s?\\b','i').test(prompt));
@@ -511,7 +544,7 @@ function inconsistentArithmetic(text){
  });
 }
 
-export async function generateStudyReply(input,env,request,metrics=[]){
+export async function generateStudyReply(input,env,request,metrics=[],{tavilyDiagnostic=false}={}){
  if(input?.task==='practice')return generatePractice(input,env);
  if(input?.task==='academic')return json(await academicReferences(input,env,request,crypto.randomUUID(),{course:true,metrics}));
  if(input?.task==='practiceBatch'||input?.task==='outline')return generateLearningContent(input,env,request,metrics);
@@ -548,7 +581,7 @@ export async function generateStudyReply(input,env,request,metrics=[]){
  const syllabusTopics=studyUnit&&Array.isArray(input.syllabusTopics)?input.syllabusTopics.slice(0,12)
   .map(title=>validatedTopicTitle(title,{anchored:true,subject:clean(input.subject,100)})).filter(Boolean):[];
  const priorities=summary&&Array.isArray(input.priorities)?input.priorities.slice(0,6).map(priority=>({topic:clean(priority?.topic,100),question:clean(priority?.prompt,280)})):[];
- const exactTopic=summary||hint||examAnswer?clean(input.topic,100):topic.selectedTopic||
+ const exactTopic=summary?clean(input.topic,100):topic.selectedTopic||
   publicStudyConcepts(question)[0]||clean(input.topic,100);
  const publicTopic=summary||examAnswer?summarySearchTopic(clean(input.subject,100),[...topics,clean(input.topic,150),...(examAnswer?[question]:[])]):automatic?topic.searchTopic||(!topic.skipRetrieval&&studyPage?.title?summarySearchTopic(clean(input.subject,100),[studyPage.title]):''):input.publicTopic;
  const academicInput={...input,subject:clean(input.subject,100)||studySubject(publicTopic??'')||studySubject(question),topic:exactTopic};
@@ -581,20 +614,28 @@ export async function generateStudyReply(input,env,request,metrics=[]){
     retrievalDiagnostics:{providerAttempted:false,providerResults:null,contentRetrieved:0,evidenceSupplied:0,evidenceUsed:0}});
   }
  }
- const wantsWeb=mode==='web'||!calculation&&(!uploaded.length&&(automatic&&Boolean(publicTopic)||mode==='mixed'&&(task==='notes'||Boolean(clean(publicTopic,100)))));
+ const requestsWeb=automatic&&academic&&/\b(?:web|online|academic) (?:sources|references)|\b(?:search|browse) the web\b/i.test(question);
+ const wantsWeb=mode==='web'||!calculation&&(requestsWeb&&Boolean(publicTopic)||
+  !uploaded.length&&(automatic&&Boolean(publicTopic)||mode==='mixed'&&(task==='notes'||Boolean(clean(publicTopic,100)))));
  const search=()=>retrieveWeb(publicTopic,env,request,requestId,academic?{subject:academicInput.subject,topic:exactTopic}:null,metrics);
  const scoped=academic&&!topic.skipRetrieval&&(scope.named||wantsWeb)
-  ?await academicReferences(academicInput,env,request,requestId,{fallback:!uploaded.length&&wantsWeb&&!practiceExample,metrics}):null;
+  ?await academicReferences(academicInput,env,request,requestId,{fallback:wantsWeb&&!practiceExample,metrics,diagnostic:tavilyDiagnostic}):null;
  let retrieval=scoped??(wantsWeb?await search():null);
  let evidenceSupplied=0;
  let evidenceUsed=0;
+ let webEvidenceUsed=0;
+ let tavilyEvidenceUsed=0;
  let availableSources=0;
  let groundingIssue;
  const requestMetadata=()=>({requestId,...(scoped?{academicScope:scoped.scope,officialSearch:scoped.officialSearch}:{}),
    ...(retrieval?.webSearch?{webSearch:retrieval.webSearch}:{}),evidenceSupplied,retrievalDiagnostics:{providerAttempted:Boolean(retrieval?.webSearch?.attempted||scoped?.officialSearch?.attempted),
+    webEvidenceUsed,tavilyEvidenceUsed,
     providerResults:retrieval?.webSearch?.providerResultCount??scoped?.officialSearch?.providerResultCount??null,
     contentRetrieved:availableSources,evidenceSupplied,evidenceUsed},...(groundingIssue?{groundingIssue}:{})});
  const webFailure=()=>json({error:retrieval.webStatus,code:retrieval.webSearch.code,...requestMetadata()},retrieval.status);
+ if(tavilyDiagnostic&&(!retrieval?.webSearch?.attempted||retrieval.webSearch.providerStatus!==200||!retrieval.sources.length)){
+  return retrieval?.webSearch?webFailure():json({error:webErrors.web_topic_required.message,code:'web_topic_required',...requestMetadata()},422);
+ }
  const quotaLimited=()=>retrieval?.status===429;
  if(!automatic&&(mode==='web'||task==='notes'&&!uploaded.length)&&retrieval&&!retrieval.sources.length&&!quotaLimited())return webFailure();
  // Exam papers establish provenance and scope. Their question text does not establish a solution.
@@ -643,8 +684,8 @@ export async function generateStudyReply(input,env,request,metrics=[]){
  };
  // Directly inspected definitions are useful even when search or generation is unavailable.
  const askedConcepts=publicStudyConcepts(question);
- const directReading=academic&&['chat','coach'].includes(task)&&
-    /\b(?:what is|define|explain)\b/i.test(question)&&
+ const directReading=academic&&(['chat','coach'].includes(task)||studyUnit)&&
+    /\b(?:what is|define|explain|teach)\b/i.test(question)&&
     !/\b(?:compare|contrast|calculate|why|worked example|requirements|conditions|criteria)\b/i.test(question)
   ?[...registry.values()].filter(source=>source.role==='conceptual').flatMap(source=>source.excerpt.split('\n\n')
     .map(quote=>({source,quote,labels:publicStudyConcepts(quote).filter(label=>askedConcepts.includes(label))}))
@@ -656,6 +697,7 @@ export async function generateStudyReply(input,env,request,metrics=[]){
    .find(passage=>passage!==quote&&/\brace condition\b/i.test(passage)&&passage.length<=400):undefined;
   const quotes=background?[background,quote]:[quote];
   evidenceUsed=1;
+  webEvidenceUsed=1;
   return json({explanation:quotes.join('\n\n'),generated:false,sources:[{...source,supportingQuote:quote,supportingQuotes:quotes}],sourceVerified:true,
    evidenceStatus:'source_backed',validationStatus:'not_independently_checked',citationCount:1,
    citationMap:quotes.map((_,index)=>({section:index+1,sourceIds:[source.id]})),...requestMetadata()});
@@ -681,10 +723,12 @@ export async function generateStudyReply(input,env,request,metrics=[]){
    availableSources=uploaded.length+syllabusCoverage.length+(retrieval?.sources?.length??0);
   }
   if(!automatic&&!retrieval.sources.length&&!quotaLimited())return webFailure();
-  const extraSources=wantsWeb?[]:(retrieval?.sources??[]).filter(source=>source.category!=='official-pyq'&&source.category!=='official-syllabus');
+  const extraSources=wantsWeb?[]:(retrieval?.sources??[]).filter(source=>source.category!=='official-pyq'&&source.category!=='official-syllabus'&&
+   (source.role==='conceptual'||source.status!=='page-inspected'));
   for(const source of extraSources)registry.set(source.id,source);
   grounded=extraSources.length>0;
   evidenceSupplied=Math.max(evidenceSupplied,grounded?registry.size:0);
+  if(tavilyDiagnostic&&!grounded)return json({code:'insufficient_evidence',error:aiErrors.insufficient_evidence,...requestMetadata()},422);
   result=await infer(grounded);
   checked=result.text&&grounded?checkStudyAnswer(result.text,registry,!academic||!automatic,academic||summary||examAnswer):null;
   attempts=2;
@@ -698,7 +742,7 @@ export async function generateStudyReply(input,env,request,metrics=[]){
   else if(!academic||!directReading)return json({error:aiErrors.citation_validation_failed+' The correction could not run. '+aiErrors[correction.code],code:'citation_validation_failed',correctionCode:correction.code,...requestMetadata()},correction.status);
   else return directReadingResponse();
  }
- if(academic&&attempts===1&&checked?.issue&&checked.issue!=='contradicted_reference'&&result.text&&automatic){
+ if(!tavilyDiagnostic&&academic&&attempts===1&&checked?.issue&&checked.issue!=='contradicted_reference'&&result.text&&automatic){
   const unverified=await infer(false);
   log(2,unverified,null);
   if(unverified.text){result=unverified;checked=null;}
@@ -718,6 +762,8 @@ export async function generateStudyReply(input,env,request,metrics=[]){
  const explanation=checked?.explanation??result.text;
  const verificationStarted=now();
  evidenceUsed=checked?.sources?.length??0;
+ webEvidenceUsed=checked?.sources?.filter(source=>source.kind==='web').length??0;
+ tavilyEvidenceUsed=checked?.sources?.filter(source=>source.retrievedBy==='tavily').length??0;
  const exampleCalculation=numericalExample&&!calculation?supportedCalculation(explanation):null;
  const numerical=checkNumericalAnswer(exampleCalculation?explanation:question,explanation,calculation??exampleCalculation);
  const evidenceStatus=checked?.evidenceStatus??'no_supporting_source';

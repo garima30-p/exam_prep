@@ -35,7 +35,7 @@ const documentKinds=['Unclassified','Syllabus','Past paper','Notes','Administrat
 const empty:Context = {subject:'',date:'',minutes:0,pass:'',pattern:'',familiarity:'unknown'};
 type Page = 'pricing'|'privacy'|'terms';
 type PreparationMode = 'last-minute'|'study';
-type BookContent = {text:string;references:CoachSource[];webLimited:boolean;excerpt?:boolean;verification?:AnswerVerification;verificationError?:string};
+type BookContent = {text:string;references:CoachSource[];excerpt?:boolean;verification?:AnswerVerification;verificationError?:string};
 type Discussion = {title:string;text:string;sources:readonly Source[];question?:PracticeItem;pageId?:string};
 
 type CoachSource=LearningSource;
@@ -87,33 +87,70 @@ const evidenceLabels={source_backed:'Source-backed',partially_source_backed:'Par
 const validationLabels={deterministically_checked:'Deterministically checked',reviewed_against_references:'Reviewed against academic references',
   not_independently_checked:'Not independently checked',check_failed:'Check failed'};
 
-function SourceStatus({references,openSource,generated=true,verification}:{
-  references:readonly CoachSource[];openSource:(source:Source)=>void;generated?:boolean;verification?:AnswerVerification;
+function webSearchLabel(search:AnswerVerification['webSearch'],webCount:number){
+  if(!search)return null;
+  switch(search.code){
+    case 'ok': return webCount?'Academic web evidence is listed below.':'Web results were retrieved, but none support this answer.';
+    case 'web_usage_limit': {
+      const limits=search.quota?.blockedBy??[];
+      const scope=limits.includes('guest_daily')&&limits.includes('global_daily')?'Guest and shared':
+        limits.includes('guest_daily')?'Guest':limits.includes('global_daily')?'Shared':'Daily';
+      return scope+' web-search limit reached. Tavily was not contacted.';
+    }
+    case 'web_no_results': return search.providerResultCount?'Search results contained no relevant academic passages.':'No relevant web results were found.';
+    case 'web_not_configured':
+    case 'web_quota_unavailable': return 'Academic web search is unavailable.';
+    case 'web_provider_credit_limit':
+    case 'web_provider_rate_limit':
+    case 'web_provider_spending_limit': return 'The web provider reached a usage limit.';
+    default:return 'Academic web search did not complete.';
+  }
+}
+
+function SourceStatus({references,openSource,generated=true,verification,scope}:{
+  references:readonly CoachSource[];openSource:(source:Source)=>void;generated?:boolean;
+  verification?:AnswerVerification;scope?:Source;
 }) {
   const evidence=verification?.evidenceStatus;
   const validation=verification?.validationStatus;
-  if(!generated&&!references.length&&!validation)return null;
+  const web=references.filter(reference=>reference.kind==='web');
+  const uploads=references.filter(reference=>reference.kind==='uploaded');
+  const searchStatus=webSearchLabel(verification?.webSearch,web.length);
+  const scopeIsListed=scope&&uploads.some(reference=>
+    reference.documentIndex===scope.documentIndex&&reference.page===scope.page&&reference.excerpt===scope.excerpt);
+  if(!generated&&!references.length&&!validation&&!scope&&!searchStatus)return null;
+  const showQuotes=(reference:CoachSource)=>(reference.supportingQuotes??[reference.supportingQuote||reference.excerpt]).filter(Boolean)
+    .map((quote,index)=><blockquote key={index}>{quote}</blockquote>);
   return <div className="source-status">
-    {generated&&<small>{references.length?'AI-generated explanation':'AI-generated · Not source-verified'}</small>}
-    {(references.length>0||validation)&&<details><summary>{references.length?'Sources ↗ ('+references.length+')':'Answer information'}</summary>
-      {evidence&&<small>{evidenceLabels[evidence]}</small>}
+    <details>
+      <summary>{references.length||scope?'Sources ↗':'Source details'}</summary>
+      {evidence?<small>{evidenceLabels[evidence]}</small>:generated&&!references.length?<small>No supporting source available</small>:null}
       {validation&&<small>{validationLabels[validation]}{verification?.validationMethod?' · '+verification.validationMethod:''}
         {verification?.checkedMetrics?.length?' · '+verification.checkedMetrics.join(', '):''}</small>}
-      {references.length>0&&<ul className="source-references">{references.map(reference=><li key={reference.id}>
-        {reference.kind==='uploaded'?<>
-          <button className="link accent source" onClick={()=>openSource(reference)}>{sourceLabel(reference)}</button>
-          <small>{reference.documentType?'Uploaded '+reference.documentType.toLowerCase():'Student-provided material'}
-            {reference.method==='ocr'?' · OCR text, check against the original':''}</small>
-        </>:<>
+      {searchStatus&&<small>{searchStatus}</small>}
+      {(uploads.length>0||scope)&&<>
+        <strong className="source-group">Uploaded documents</strong>
+        <ul className="source-references">
+          {scope&&!scopeIsListed&&<li><button type="button" className="link accent source" onClick={()=>openSource(scope)}>{sourceLabel(scope)}</button>
+            <small>Uploaded syllabus · Course scope</small></li>}
+          {uploads.map(reference=><li key={reference.id}>
+            <button type="button" className="link accent source" onClick={()=>openSource(reference)}>{sourceLabel(reference)}</button>
+            <small>{reference.documentType?'Uploaded '+reference.documentType.toLowerCase():'Student-provided material'}
+              {reference.method==='ocr'?' · OCR text, check against the original':''}</small>
+            {showQuotes(reference)}
+          </li>)}
+        </ul>
+      </>}
+      {!!web.length&&<>
+        <strong className="source-group">Web sources</strong>
+        <ul className="source-references">{web.map(reference=><li key={reference.id}>
           <a className="link accent source" href={reference.url} target="_blank" rel="noopener noreferrer">{reference.title}</a>
-          <small>{[reference.publisher,reference.category==='official-syllabus'?'Official university syllabus':reference.category==='official-pyq'
-            ?'Official university PYQ':'Academic reference',reference.status==='page-inspected'?'Page inspected':reference.status==='provider-page-text'
-            ?'Page text supplied by retrieval':reference.status==='provider-excerpt'?'Search excerpt':null].filter(Boolean).join(' · ')}</small>
-        </>}
-        {(reference.supportingQuotes??[reference.supportingQuote||reference.excerpt]).filter(Boolean)
-          .map((quote,index)=><blockquote key={index}>{quote}</blockquote>)}
-      </li>)}</ul>}
-    </details>}
+          <small className="source-url">{reference.url}</small>
+          <small>{[reference.publisher,reference.retrievedBy==='direct'?'Directly inspected':null].filter(Boolean).join(' · ')}</small>
+          {showQuotes(reference)}
+        </li>)}</ul>
+      </>}
+    </details>
   </div>;
 }
 
@@ -139,6 +176,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   const outlineCache=useRef(new Map<string,TopicOutline[]>());
   const outlineRequest=useRef<{start:()=>void;operation:AbortController}|null>(null);
   const studyHeading=useRef<HTMLHeadingElement>(null);
+  const topicSidebar=useRef<HTMLElement>(null);
   const [prompt,setPrompt]=useState('');
   const promptKey=studySessionPrompt(prompt);
   const book=savedBook?.promptKey===promptKey?savedBook:null;
@@ -211,9 +249,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   useLayoutEffect(()=>{
     const viewport=window.visualViewport;
     const section=composer.current;
-    if(!viewport||!section)return;
+    if(!section)return;
     const resize=()=>{
-      const obscured=Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop);
+      const obscured=viewport?Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop):0;
       section.style.setProperty('--composer-inset',obscured+'px');
     };
     const updateLauncher=()=>{
@@ -224,13 +262,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const observer=typeof ResizeObserver==='function'?new ResizeObserver(updateLauncher):null;
     observer?.observe(section);
     updateLauncher();
-    viewport.addEventListener('resize',resize);
-    viewport.addEventListener('scroll',resize);
+    resize();
+    viewport?.addEventListener('resize',resize);
+    viewport?.addEventListener('scroll',resize);
     return ()=>{
       observer?.disconnect();
       document.documentElement.style.removeProperty('--composer-clearance');
-      viewport.removeEventListener('resize',resize);
-      viewport.removeEventListener('scroll',resize);
+      viewport?.removeEventListener('resize',resize);
+      viewport?.removeEventListener('scroll',resize);
     };
   },[]);
   const [page,setPage]=useState<Page|null>(null);
@@ -324,14 +363,21 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     if(mode!=='study'||!activePractice||(!activeBookContent&&!bookErrors[lessonKey]))return;
     const frame=requestAnimationFrame(()=>{
       if(!practice.batches[activePractice.key]?.requested)void practice.add(activePractice,5,'',true);
-      if(!practice.details[practice.detailKey(activePractice,'example')])void practice.load(activePractice,'example');
     });
     return ()=>cancelAnimationFrame(frame);
   },[mode,activePractice,activeBookContent,practice,bookErrors,lessonKey]);
   useEffect(()=>{
     if(!activeBookPage)return;
     studyHeading.current?.focus({preventScroll:true});
-    studyHeading.current?.scrollIntoView?.({block:'start'});
+    studyHeading.current?.scrollIntoView?.({block:'start',behavior:'instant'});
+    const sidebar=topicSidebar.current;
+    const selectedTopic=sidebar?.querySelector('[aria-current="location"]');
+    if(sidebar&&selectedTopic&&sidebar.clientHeight){
+      const frame=sidebar.getBoundingClientRect();
+      const link=selectedTopic.getBoundingClientRect();
+      if(link.bottom>frame.bottom)sidebar.scrollTop+=link.bottom-frame.bottom+6;
+      else if(link.top<frame.top)sidebar.scrollTop+=link.top-frame.top-6;
+    }
   },[activeBookPage?.id,mode]);
   useEffect(()=>{
     if(!book||!activeBookPage||loadingPage||bookRequest.current||bookContent[lessonKey]||bookErrors[lessonKey])return;
@@ -343,6 +389,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const requestedAt=now();
     void (async()=>{
       let verificationError:string|undefined;
+      let sourceVerification:AnswerVerification|undefined;
       try{
         const response=await fetch('/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
           signal:AbortSignal.any([operation.signal,AbortSignal.timeout(50000)]),
@@ -350,8 +397,9 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             subject:book.subject,topics:[unit.title],topic:unit.title,
             syllabusTopics:unit===book.pages[0]?book.pages.filter(page=>page.scope).slice(0,12).map(page=>page.title):undefined,
             request:(unit===book.pages[0]&&book.initialRequest?book.initialRequest+'\n\n':'')+'Teach '+unit.title+' to a beginner. Start with the foundation, explain the essential ideas and relationships, then give a short takeaway.',
-            priorities:(unit.priorities??unit.questions).slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:unit.passages.map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'}))})});
+            priorities:(unit.priorities??unit.questions).slice(0,4).map(question=>({topic:question.topic,prompt:question.prompt})),sources:[...unit.passages,...(unit.scope?[unit.scope]:[])].map(source=>({...source,documentType:files.find(file=>file.id===source.documentIndex)?.kind||'Pasted notes'}))})});
         const data=await response.json() as ({explanation?:string;code?:string;error?:string;sources?:CoachSource[];webSearch?:{code:string}}&AnswerVerification);
+        sourceVerification=data;
         if(!response.ok||!data.explanation?.trim()){
           if(data.validationStatus==='check_failed'){
             verificationError=data.error||'This answer failed an academic check.';
@@ -361,14 +409,14 @@ export function App({api=demoApi}:{api?:ExamApi}) {
             ?'The generated notes could not be source-verified.':'This topic could not be generated.');
         }
         if(!operation.signal.aborted){
-          setBookContent(current=>({...current,[lessonKey]:{text:data.explanation!,references:data.sources??[],verification:data,webLimited:Boolean(!data.sources?.length&&data.webSearch&&data.webSearch.code!=='ok')}}));
+          setBookContent(current=>({...current,[lessonKey]:{text:data.explanation!,references:data.sources??[],verification:data}}));
           browserTiming('study:lesson-request',requestedAt);
         }
       }catch(error){
         if(operation.signal.aborted)return;
         if(excerpts.length)setBookContent(current=>({...current,[lessonKey]:{text:excerpts.map(source=>source.excerpt).join('\n\n'),
           references:excerpts.map((source,index)=>({...source,kind:'uploaded',id:'excerpt-'+index})),
-          webLimited:false,excerpt:true,verificationError}}));
+          excerpt:true,verificationError,verification:sourceVerification}}));
         else setBookErrors(current=>({...current,[lessonKey]:error instanceof Error&&error.name==='Error'?error.message:'This topic could not be generated.'}));
       }finally{
         if(bookRequest.current===operation){bookRequest.current=null;setLoadingPage(null);}
@@ -979,63 +1027,36 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           <button type="button" className="secondary" onClick={()=>{outlineRequest.current?.start();mapDialog.current?.showModal();}}>Topic Map</button>
         </div>
         <section ref={studyNotes} className="learning-notes" aria-label={mode==='study'?'Study workspace':'Study notes'}>
-          {busy&&documents.some(record=>record.total===null||record.pages.some(page=>page.status==='pending'))&&
-            <small>Showing readable pages while the remaining pages are checked.</small>}
-          {academic===null&&book.university&&<p className="notice">University references could not be checked. Use uploaded material or general explanations.</p>}
-          {academic&&<div className="academic-scope">
-            {academic.scope.requested&&<small>{academic.scope.officialSyllabus?'Official syllabus located for '+(academic.scope.institution??'the named university')+'.'
-              :'An official syllabus for '+(academic.scope.institution??'the named university')+' could not be confirmed. Use uploaded material or general academic references.'}</small>}
-            {academic.scope.requested&&!academic.scope.officialPyq&&<small>No official past paper was confirmed for this course.</small>}
-            {academic.sources.length>0&&<details><summary>Course references</summary><SourceStatus references={academic.sources} generated={false} openSource={reference=>open(null,reference)}/></details>}
-          </div>}
-          {book.pages.map((unit,index)=>{
-            const practiceForPage=practiceTopic(unit)!;
-            const key=mode+':'+practiceForPage.key;
-            const content=bookContent[key];
-            const current=index===bookIndex;
-            if(!current&&!content&&!practice.batches[practiceForPage.key])return null;
-            const hidden=!current&&(mode==='study'||index>bookIndex||!content);
-            return <article className="learning-section" key={unit.id} hidden={hidden}>
+          <article className="learning-section" key={activeBookPage.id}>
               <header className="study-heading">
-                {current&&theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={0}/>}
-                <h2 tabIndex={current?-1:undefined} ref={current?studyHeading:undefined}>{unit.title}</h2>
+                {theme.anime&&theme.character&&<StudyCharacter anime={theme.anime} character={theme.character} pulse={0}/>}
+                <h2 tabIndex={-1} ref={studyHeading}>{activeBookPage.title}</h2>
               </header>
-              {unit.reference&&<SourceStatus references={[unit.reference]} generated={false} openSource={reference=>open(null,reference)}/>}
-              {unit.scope&&<SourceStatus references={[{...unit.scope,kind:'uploaded',id:unit.id}]} generated={false} openSource={reference=>open(null,reference)}/>}
-              {mode==='study'&&current&&<h3 className="study-introduction">Introduction</h3>}
-              {content?<div className="learning-body">
-                <CoachAnswer text={content.text.replace(/^#{1,6}\s+([^\n]+)\n+/, (heading,title:string)=>
-                  title.trim().toLowerCase()===unit.title.toLowerCase()?'':heading)}/>
-                {content.verificationError&&<p role="alert" className="notice">{content.verificationError}</p>}
-                {content.excerpt&&<p className="notice">Generated notes are unavailable. These excerpts come from your uploaded material.</p>}
-                {content.webLimited&&!content.references.length&&<small>Web sources were unavailable for this topic.</small>}
-                <SourceStatus references={content.references} generated={!content.excerpt} verification={content.verification} openSource={reference=>open(null,reference)}/>
-                {current&&<div className="lesson-actions">
-                  {mode==='study'&&<button type="button" className="link accent" onPointerDown={event=>{if(selectedText)event.preventDefault();}}
-                    onClick={()=>discuss({title:unit.title,text:selectedText||content.text,sources:unit.passages})}>
-                    {'Ask Coach'+(selectedText?' about selection':'')}</button>}
-                  {mode==='last-minute'&&<button type="button" className="link accent" onClick={()=>selectMode('study')}>Explore deeper</button>}
-                  {mode==='last-minute'&&recallPage!==key&&<button type="button" className="link accent" onClick={()=>{rememberTopic();setRecallPage(key);}}>Quick Recall</button>}
-                </div>}
-                {mode==='last-minute'&&current&&recallPage===key&&<section aria-label="Quick Recall" className="quick-recall">
-                  <p>Ready for a quick recall?</p>
-                  <ReviewForm key={key} items={reviewItems(unit,content.text,false)} openSource={reference=>open(null,reference)}/>
+              {activeBookContent?<div className="learning-body">
+                <CoachAnswer text={activeBookContent.text.replace(/^#{1,6}\s+([^\n]+)\n+/, (heading,title:string)=>
+                  title.trim().toLowerCase()===activeBookPage.title.toLowerCase()?'':heading)}/>
+                {activeBookContent.verificationError&&<p role="alert" className="notice">{activeBookContent.verificationError}</p>}
+                {activeBookContent.excerpt&&<p className="notice">Generated notes are unavailable. These excerpts come from your uploaded material.</p>}
+                <SourceStatus references={activeBookContent.references} scope={activeBookPage.scope} generated={!activeBookContent.excerpt} verification={activeBookContent.verification} openSource={reference=>open(null,reference)}/>
+                {mode==='last-minute'&&recallPage!==lessonKey&&<div className="lesson-actions"><button type="button" className="link accent"
+                  onClick={()=>{rememberTopic();setRecallPage(lessonKey);}}>Quick Recall</button></div>}
+                {mode==='last-minute'&&recallPage===lessonKey&&<section aria-label="Quick Recall" className="quick-recall">
+                  <ReviewForm key={lessonKey} items={reviewItems(activeBookPage,activeBookContent.text,false)} openSource={reference=>open(null,reference)}/>
                   <button type="button" className="link" onClick={()=>setRecallPage(null)}>Back to notes</button>
                 </section>}
-              </div>:bookErrors[key]?<>
-                <p role="alert">{bookErrors[key]}</p>
-                <button type="button" className="secondary" onClick={()=>setBookErrors(({[key]:_,...rest})=>rest)}>Retry topic</button>
+              </div>:bookErrors[lessonKey]?<>
+                <p role="alert">{bookErrors[lessonKey]}</p>
+                <button type="button" className="secondary" onClick={()=>setBookErrors(({[lessonKey]:_,...rest})=>rest)}>Retry topic</button>
               </>:<p role="status">Preparing notes…</p>}
-              {(current||mode==='study')&&<SolvedExample key={key} topic={practiceForPage} practice={practice}
-                askCoach={mode==='study'?text=>discuss({title:unit.title,text:selectedText||text,sources:unit.passages}):undefined}
+              {activePractice&&mode==='study'&&<SolvedExample key={lessonKey} topic={activePractice} practice={practice}
+                askCoach={mode==='study'?text=>discuss({title:activeBookPage.title,text:selectedText||text,sources:activeBookPage.passages}):undefined}
                 renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated,verification)=>
                   <SourceStatus references={references} generated={generated} verification={verification} openSource={reference=>open(null,reference)}/>}/>}
-              {mode==='study'&&<PracticeQuestions key={unit.id} topic={practiceForPage} practice={practice}
-                selected={selectedQuestions[unit.id]?.id} selectQuestion={selectPractice} askCoach={askPractice} openSource={reference=>open(null,reference)}
+              {mode==='study'&&activePractice&&<PracticeQuestions key={activeBookPage.id} topic={activePractice} practice={practice}
+                selected={selectedQuestions[activeBookPage.id]?.id} selectQuestion={selectPractice} askCoach={askPractice} openSource={reference=>open(null,reference)}
                 renderText={text=><CoachAnswer text={text}/>} renderSources={(references,generated,verification)=>
                   <SourceStatus references={references} generated={generated} verification={verification} openSource={reference=>open(null,reference)}/>}/>}
-            </article>;
-          })}
+          </article>
           {mode==='study'?<nav className="book-pagination" aria-label="Study pages">
             <button type="button" className="secondary" disabled={bookIndex===0} onClick={()=>openBookPage(bookIndex-1)}>← Previous</button>
             <span className="book-page-number">Page {bookIndex+1} of {book.pages.length}</span>
@@ -1043,7 +1064,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
           </nav>:activeBookContent&&(bookIndex+1<book.pages.length||outlineRequest.current)&&
             <button type="button" className="secondary" onClick={()=>{if(bookIndex+1<book.pages.length)openBookPage(bookIndex+1,true);else {outlineRequest.current?.start();mapDialog.current?.showModal?.();}}}>Next topic →</button>}
         </section>
-        <aside className="learning-sidebar" aria-label="Learning tools">
+        <aside ref={topicSidebar} className="learning-sidebar" aria-label="Learning tools">
           <button type="button" className="secondary" disabled={!activeBookContent} onClick={openQuiz}>Quiz</button>
           <h2>Topic Map</h2>
           {topicMap}
@@ -1151,11 +1172,19 @@ export function App({api=demoApi}:{api?:ExamApi}) {
         {workspaceResult&&pack.warnings.length>0&&<details><summary>Sources and coverage</summary>
           <ul>{pack.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul>
         </details>}
-        {activeBookContent&&<section>
-          <h3>Source verification</h3>
-          <p>Sources links to the uploaded passages or web references used in an answer. Unverified explanations are labeled beside the study content.</p>
-          {activeBookContent.webLimited&&<p>Web sources were unavailable for this result.</p>}
-        </section>}
+        {book&&activeBookPage&&<details><summary>Course and sources</summary>
+          {academic?.scope.requested&&<p>{academic.scope.officialSyllabus?'Official syllabus confirmed for '+(academic.scope.institution??'the named university')+'.':
+            'An official syllabus for '+(academic.scope.institution??'the named university')+' could not be confirmed.'}</p>}
+          {academic===null&&book.university&&<p>University references could not be checked.</p>}
+          {activeBookPage.reference&&<SourceStatus references={[activeBookPage.reference]} generated={false} openSource={reference=>open(null,reference)}/>}
+          {academic?.sources.length? <SourceStatus references={academic.sources} generated={false} openSource={reference=>open(null,reference)}/>:null}
+        </details>}
+        {Boolean(book?.pages[0].unassignedQuestions?.length)&&<details><summary>Uploaded questions without a topic match</summary>
+          <ul>{book!.pages[0].unassignedQuestions!.map(question=><li key={question.id}>
+            <p>{question.prompt}</p>
+            <button type="button" className="link source" onClick={()=>open(null,question.source)}>{sourceLabel(question.source)}</button>
+          </li>)}</ul>
+        </details>}
         {activeApi.prepare&&documents.length>0&&<DocumentReview documents={documents} files={files} busy={busy} onVerify={verifyPage}/>}
         <p>Original files stay on this device. Extracted text is sent for analysis.</p>
         <nav className="product-links" aria-label="Product information">

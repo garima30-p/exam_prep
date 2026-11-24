@@ -47,6 +47,7 @@ export function checkStudyAnswer(raw, registry, strict, verifyRelevance=false) {
   let issue;
   let supportedSections=0;
   let reviewedSections=0;
+  let sectionsWithEvidence=0;
   for (const section of answer.sections) {
     if (typeof section?.text !== 'string' || !section.text.trim() || !Array.isArray(section.citations) || section.citations.length > 3) {
       issue ??= 'malformed_citations';
@@ -54,6 +55,8 @@ export function checkStudyAnswer(raw, registry, strict, verifyRelevance=false) {
     }
     if (strict && !section.citations.length) issue ??= 'missing_citations';
     const usedIds=new Set();
+    const citedWords=new Set();
+    const citedQuotes=[];
     let supported=false;
     let reviewed=false;
     for (const citation of section.citations) {
@@ -80,6 +83,8 @@ export function checkStudyAnswer(raw, registry, strict, verifyRelevance=false) {
         }
       }
       supported=true;
+      for(const word of keywords(quote))citedWords.add(word);
+      citedQuotes.push(quote);
       usedIds.add(id);
       reviewed ||= equivalentClaim(section.text,quote);
       const linked=references.get(id);
@@ -87,13 +92,19 @@ export function checkStudyAnswer(raw, registry, strict, verifyRelevance=false) {
       references.set(id, {...source,supportingQuote:supportingQuotes[0],supportingQuotes});
 
     }
-    if(supported)supportedSections++;
+    if(supported){
+      sectionsWithEvidence++;
+      const claims=section.text.split(/(?<=[.!?])\s+|\n+/).map(keywords).filter(words=>words.size>=2);
+      const allClaimsSupported=claims.every(words=>
+        [...words].filter(word=>citedWords.has(word)).length>=Math.max(2,Math.ceil(words.size/3)));
+      if(!verifyRelevance||allClaimsSupported||citedQuotes.some(quote=>equivalentClaim(section.text,quote)))supportedSections++;
+    }
     if(reviewed)reviewedSections++;
     if(usedIds.size)citationMap.push({section:sections.length+1,sourceIds:[...usedIds]});
     sections.push(section.text.trim());
   }
   if (issue) return { issue, hasText: sections.length > 0 || answer.sections.some(section=>typeof section?.text==='string'&&section.text.trim()), ids:[...ids] };
-  const evidenceStatus=!supportedSections?'no_supporting_source':supportedSections===sections.length?'source_backed':'partially_source_backed';
+  const evidenceStatus=!sectionsWithEvidence?'no_supporting_source':supportedSections===sections.length?'source_backed':'partially_source_backed';
   return {explanation:sections.join('\n\n'),sources:[...references.values()],ids:[...ids],evidenceStatus,citationMap,
     validationStatus:reviewedSections===sections.length?'reviewed_against_references':'not_independently_checked'};
 

@@ -46,16 +46,64 @@ const supportedConcept=(title,subject)=>{
   (!subject||!studySubject(title)||!studySubject(subject)||studySubject(title)===studySubject(subject));
 };
 
+function hasBalancedDelimiters(title){
+ const delimiters=[];
+ for(const character of title){
+  if(character==='('||character==='['||character==='{')delimiters.push(character);
+  else if(character===')'||character===']'||character==='}'){
+   if(delimiters.pop()!==({')':'(',']':'[','}':'{'}[character]))return false;
+  }
+ }
+ return delimiters.length===0;
+}
+
+function differsByOneCharacter(left,right){
+ if(left===right||Math.abs(left.length-right.length)>1)return false;
+ const index=[...left].findIndex((character,offset)=>character!==right[offset]);
+ if(index<0)return left.length!==right.length;
+ if(left.length===right.length)return left.slice(index+1)===right.slice(index+1);
+ return left.length>right.length?left.slice(index+1)===right.slice(index):left.slice(index)===right.slice(index+1);
+}
+
+function headingEditDistance(word,target){
+ let previous=Array.from({length:target.length+1},(_,i)=>i);
+ for(const [i,character] of [...word].entries()){
+  const current=[i+1];
+  for(let j=1;j<=target.length;j++)current.push(Math.min(current[j-1]+1,previous[j]+1,previous[j-1]+Number(character!==target[j-1])));
+  previous=current;
+ }
+ return previous[target.length];
+}
+
+const operatingSystemsHeadings=['Operating System Services','Multiple-Processor Scheduling','Thread Scheduling'];
+
+function reconstructOcrHeading(title,subject){
+ const parts=title.match(/^([a-z]{10,14})\s+(to|[t({][o0]|[o0])\s+(.+)$/i);
+ if(parts&&topicKey(parts[3])===topicKey(subject)&&headingEditDistance(parts[1].toLowerCase(),'introduction')<=2){
+  return 'Introduction to '+parts[3].trim();
+ }
+ if(topicKey(subject)!=='operating system')return title;
+ const candidate=title.replace(/\.\s+[a-z]{1,3}$/,'').toLowerCase();
+ const alternate=operatingSystemsHeadings.find(heading=>{
+  const normalized=heading.toLowerCase();
+  return candidate.slice(0,3)===normalized.slice(0,3)&&Math.abs(candidate.length-normalized.length)<=2&&
+   headingEditDistance(candidate,normalized)<=2;
+ });
+ return alternate??title;
+}
+
 export function validatedTopicTitle(value,{anchored=false,ocr=false,subject='',context=false}={}){
  if(typeof value!=='string')return '';
  const raw=withoutMarker(value);
- const title=raw.replace(/(?:\s+|\s*\|+\s*)\(?\d+\s*(?:hrs?|hours?)\)?$/i,'')
+ let title=raw.replace(/(?:\s+|\s*\|+\s*)\(?\d+\s*(?:hrs?|hours?)\)?$/i,'')
   .trim().replace(/[.;,]+$/,'');
- if(!title||numericNoise.test(title)||syllabusAdministrative(title)||syllabusContentsHeading(title)||
+ if(ocr&&anchored&&subject)title=reconstructOcrHeading(title,subject);
+ if(ocr&&/\b\p{Ll}{4,}\.\s+\p{Ll}{1,3}$/u.test(title))return '';
+ if(!title||!hasBalancedDelimiters(title)||numericNoise.test(title)||syllabusAdministrative(title)||syllabusContentsHeading(title)||
   /^(?:course (?:overview|summari[sz]ation|summary)|epilogue)$/i.test(title)||
   /^(?:no\.|sl\.|sr\.|serial\b|page\s+\d|contact hours?\b)/i.test(title)||endsIncomplete.test(title)||
   !/^[\p{L}\p{N}]/u.test(title)||!/[\p{L}]/u.test(title)||/^(?:a|an|the)\s+[\p{L}]+(?:al|ive|ary|ing|ed|ous|ent)$/iu.test(title)||title.length>96||title.split(/\s+/).length>13||
-  /[!?|…]|\.{2,}|\s+\d{2,}\s+\d|\bCO\d+\b/u.test(title)||sentence.test(title)||orphanedTail.test(title))return '';
+  /[!?|…]|\.{2,}|\s+\d{2,}\s+\d|\bCO\d+\b/u.test(title)||sentence.test(title)||orphanedTail.test(title)||/\bfor (?:handling|managing|using|implementing)$/i.test(title))return '';
  const known=supportedConcept(title,subject);
  if(known)return title;
  const words=title.split(/\s+/);
@@ -74,12 +122,13 @@ function canJoin(left,right,marked,subject){
  const head=right.split(/[,;:]/,1)[0].trim();
  if(!head||sentence.test(head)||/[.!?]$/.test(left))return false;
  if(supportedConcept((tail+' '+head).trim(),subject))return true;
+ if(subject&&/^(?:introduction|overview)\s+(?:to|of)$/i.test(tail)&&topicKey(head)===topicKey(subject))return true;
  if(tail!==left&&/^\p{Lu}[\p{L}\d-]*$/u.test(tail)&&/^\p{Lu}\p{Ll}+[,:;]/u.test(right))return true;
  return marked&&/^\p{Lu}[\p{L}\d-]*$/u.test(left)&&/^\p{Lu}\p{Ll}+[,:;]$/u.test(right)&&!acronym.test(left);
 }
 
 export function parseSyllabus(pages,identifiedSubject=''){
- const topics=[],seen=new Set();
+ const topics=[],seen=new Map();
  const subject=syllabusSubject(pages)||identifiedSubject;
  const subjectKey=topicKey(subject);
  // Even an attachment manually labelled as a syllabus must have curriculum structure.
@@ -91,20 +140,43 @@ export function parseSyllabus(pages,identifiedSubject=''){
  let inside=false,blocked=false,unit=0,unitName='',major='',lastPage=0;
  const add=(title,group,row,level,excerpt=row.text)=>{
   const key=topicKey(title);
-  if(!key||seen.has(key)||key===subjectKey)return;
-  seen.add(key);
+  const overview=key.match(/^(?:introduction|overview)(?: (?:to|of) (.+))?$/);
+  const equivalent=overview&&(!overview[1]||overview[1]===subjectKey)?'introduction':key;
+  if(!key||key===subjectKey)return title;
+  if(row.method==='ocr'&&group&&differsByOneCharacter(key,topicKey(group))&&supportedConcept(group,subject))return group;
+  if(seen.has(equivalent))return seen.get(equivalent);
+  seen.set(equivalent,title);
   topics.push({title,group:group===title?'':group,subject,unit,level,page:row.page,line:row.line,excerpt,method:row.method,
    validation:row.method==='ocr'?'structured-ocr':'document-structure'});
+  return title;
  };
  for(const page of pages){
   if(lastPage&&page.number>lastPage+1){inside=false;blocked=false;unit=0;unitName='';major='';}
   lastPage=page.number;
-  const rows=page.text.split(/\r?\n/).map((raw,index)=>({text:raw.trim(),indent:raw.search(/\S/),page:page.number,line:index+1,method:page.method}));
   const ocr=page.method==='ocr';
+  const rows=page.text.split(/\r?\n/).map((raw,index)=>{
+   const original=raw.trim();
+   const text=ocr?original.replace(/^\d{1,2}\s*\|\s*/,'').replace(/\s*\|(?:\s*\d{1,2})?\s*$/,'')
+    .replace(/^[‘’'“”]+\s*(?=\p{Lu})/u,''):original;
+   return {text,original,indent:raw.search(/\S/),page:page.number,line:index+1,method:page.method};
+  });
   const title=(value,anchored,context=false)=>validatedTopicTitle(value,{anchored,context,ocr,subject});
-  const children=(parts,parent,row,excerpt)=>{
-   for(const value of parts.flatMap(part=>part.split(/[,;]/))){
-    const child=title(value,true,true);
+  const children=(parts,parent,row,excerpt,next)=>{
+   const values=parts.flatMap(part=>part.split(ocr?/[,;]|(?<=\p{Ll})\.\s+(?=\p{Lu})/u:/[,;]/));
+   const anchorWords=parent.match(/\b[A-Z][a-z]{4,}\b/g)??[];
+   for(const [index,value] of values.entries()){
+    let trimmed=value.trim();
+    if(ocr&&anchorWords.length){
+     trimmed=trimmed.replace(/^([A-Z][a-z]{4,})(?=\s)/,token=>
+      anchorWords.find(anchor=>anchor.length===token.length&&anchor.slice(0,4)===token.slice(0,4)&&differsByOneCharacter(token,anchor))??token);
+     trimmed=trimmed.replace(/\b[a-z]{4,}$/g,token=>anchorWords.map(anchor=>anchor.toLowerCase())
+      .find(anchor=>anchor.length===token.length+1&&anchor.startsWith(token))??token);
+    }
+    const nextLine=next?.text.replace(/^\d{1,2}\s*\|\s*/,'')??'';
+    const endsOcrLine=ocr&&index===values.length-1&&Boolean(next)&&!structuralMarker.test(nextLine)&&!syllabusAdministrative(nextLine);
+    // Preserve a recognized term or acronym, but never promote a one-word continuation to its own topic.
+    if(endsOcrLine&&/^[\p{L}-]+$/u.test(trimmed)&&!acronym.test(trimmed)&&!supportedConcept(trimmed,subject))continue;
+    const child=title(trimmed,true,true);
     if(child)add(child,parent,row,'subtopic',excerpt);
    }
   };
@@ -116,18 +188,18 @@ export function parseSyllabus(pages,identifiedSubject=''){
    if(section){
     inside=true;blocked=false;major='';
     unit=Number(section[1])||['i','ii','iii','iv','v','vi','vii','viii','ix','x'].indexOf(section[1].toLowerCase())+1;
-    let body=section[2],excerpt=line;
+    let body=section[2],excerpt=row.original;
     if(rows[i+1]&&canJoin(body,rows[i+1].text,true,subject)){
-     const next=rows[++i].text;
-     body+=' '+next;excerpt+=' '+next;
+     const next=rows[++i];
+     body+=' '+next.text;excerpt+=' '+next.original;
     }
     const [head,...details]=body.split(/:\s*/);
     const [main,...listed]=head.split(/[,;]/);
     const rest=[...listed,...details];
     const name=title(main,true,rest.length>0)||rest.map(value=>title(value,true,true)).find(Boolean);
     unitName=name||'Unit '+section[1].toUpperCase();
-    add(unitName,'',row,name?'major':'unit',excerpt);
-    children(rest,unitName,row,excerpt);
+    unitName=add(unitName,'',row,name?'major':'unit',excerpt);
+    children(rest,unitName,row,excerpt,rows[i+1]);
     continue;
    }
    if(syllabusAdministrative(line)){
@@ -136,9 +208,9 @@ export function parseSyllabus(pages,identifiedSubject=''){
    }
    if(blocked||!inside)continue;
    const marked=structuralMarker.test(line),next=rows[i+1];
-   let body=withoutMarker(line),excerpt=line;
+   let body=withoutMarker(line),excerpt=row.original;
    if(next&&canJoin(body,next.text,marked,subject)){
-    body+=' '+next.text;excerpt+=' '+next.text;i++;
+    body+=' '+next.text;excerpt+=' '+next.original;i++;
    }
    const [head,...details]=body.split(/:\s*/);
    const [main,...listed]=head.split(/[,;]/);
@@ -147,12 +219,19 @@ export function parseSyllabus(pages,identifiedSubject=''){
    if(subjectKey&&['notes','syllabus','course outline'].some(kind=>topicKey(main)===subjectKey+' '+kind))continue;
    const nested=Boolean(next&&(next.indent>row.indent||bulletHeading.test(next.text)));
    const name=title(main,marked||details.some(value=>value.trim())||nested,!ocr&&!hasList&&Boolean(unitName));
-   if(name){
-    add(name,subordinate?major||unitName:unitName,row,subordinate?'subtopic':'major',excerpt);
-    if(!subordinate)major=name;
-   }
-   if(name||hasList&&marked)children([...listed,...details],name||major||unitName,row,excerpt);
+   const subparts=[...listed,...details];
+   const specificName=name&&/^case study$/i.test(name)&&details.length>1?title(subparts[0],true,true):'';
+   if(specificName)subparts.shift();
+   const heading=name?add(specificName||name,subordinate?major||unitName:unitName,row,subordinate?'subtopic':'major',excerpt):'';
+   if(heading&&!subordinate)major=heading;
+   if(heading||hasList&&marked)children(subparts,heading||major||unitName,row,excerpt,rows[i+1]);
   }
+ }
+ const introduction=topics.findIndex(topic=>topic.validation==='structured-ocr'&&!topic.group&&
+  topicKey(topic.title)==='introduction to '+subjectKey);
+ if(introduction>0){
+  const [heading]=topics.splice(introduction,1);
+  topics.unshift(heading);
  }
  return topics;
 }

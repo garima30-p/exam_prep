@@ -318,6 +318,8 @@ dialog::backdrop{background:var(--backdrop)}
 .study-note{padding:0;border:0;background:transparent}
 .source-status{display:flex;flex-wrap:wrap;align-items:baseline;gap:.15rem .6rem;color:var(--muted);font-size:.825rem;margin:.6rem 0}
 .source-status details > small{display:block}
+.source-group{display:block;margin-block:.65rem .2rem}
+.source-url{display:block;overflow-wrap:anywhere}
 .source-status summary{color:var(--accent);width:max-content}
 .source-status details{margin:0}
 .source-status details[open]{flex-basis:100%}
@@ -348,6 +350,7 @@ dialog::backdrop{background:var(--backdrop)}
 .message-reply{margin-bottom:1rem}
 .message-reply [role="status"]{color:var(--muted)}
 .unified-composer{position:sticky;margin-block:auto 0;padding-top:.65rem;bottom:var(--composer-inset,0px);z-index:3;padding-bottom:max(.55rem,env(safe-area-inset-bottom));background:var(--page)}
+.workspace .unified-composer{position:relative;bottom:auto}
 .unified-composer .composer{padding:.7rem}
 .unified-composer textarea{margin:0 0 .45rem;padding:.25rem;min-height:3rem;max-height:26dvh;font-size:1rem}
 .unified-composer textarea::placeholder{color:var(--hint-text);opacity:1}
@@ -379,10 +382,10 @@ dialog::backdrop{background:var(--backdrop)}
 
 .learning-layout{width:min(100%,64rem);margin:1rem auto 2rem;display:grid;grid-template-columns:minmax(0,1fr) minmax(12rem,16rem);gap:clamp(1rem,4vw,3rem);align-items:start}
 .learning-notes{min-width:0;max-width:46rem}
-.learning-section{padding:.4rem 0 1.2rem;margin-bottom:1rem;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.learning-section{padding:.4rem 0 .8rem;margin-bottom:.65rem;overflow-wrap:anywhere}
 .learning-section h2{font-size:clamp(1.45rem,4.5vw,2.2rem);scroll-margin-top:1rem}
 .learning-body .coach-answer{margin:.6rem 0;line-height:1.7}
-.learning-sidebar{border-inline-start:1px solid var(--line);padding-inline-start:1rem}
+.learning-sidebar{position:sticky;top:1rem;max-height:calc(100dvh - 2rem);overflow:auto;border-inline-start:1px solid var(--line);padding-inline-start:1rem}
 .learning-sidebar h2{font-size:1rem;margin:1rem 0 .5rem}
 .topic-map{overflow-wrap:anywhere}
 .topic-branch{margin:.5rem 0;padding-left:.65rem;border-inline-start:1px solid var(--line)}
@@ -428,7 +431,7 @@ dialog::backdrop{background:var(--backdrop)}
 .practice-options{margin:.65rem 0}
 .practice-options label{display:block;margin:.4rem 0;max-width:18rem}
 .study-introduction{font-weight:650}
-@media(max-width:1100px){.coach-toggle{bottom:calc(var(--composer-height,8rem) + max(.4rem,env(safe-area-inset-bottom)))}}
+@media(max-width:1100px){.coach-toggle{bottom:calc(var(--composer-clearance,8rem) + max(.4rem,env(safe-area-inset-bottom)))}}
 @media(max-width:760px){
  .coach-toggle{right:.6rem}
  .coach-panel{width:100%;right:0;bottom:var(--coach-inset,0px);height:min(36rem,calc(var(--coach-viewport,100dvh) - 1rem));border-radius:var(--radius) var(--radius) 0 0;padding-bottom:max(.65rem,env(safe-area-inset-bottom))}

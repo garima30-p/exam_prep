@@ -71,3 +71,18 @@ it('recovers a Roman unit marker split by OCR without turning it into a topic',(
  const pages=[{number:1,method:'ocr',text:'Course Contents\nUnit II: Process Synchronization\nUnit Ill: Deadlock Prevention\n- CPU'}];
  expect(parseSyllabus(pages,'Operating Systems').find(heading=>heading.title==='Deadlock Prevention')).toMatchObject({unit:3});
 });
+
+it('recovers an anchored OCR introduction using the declared subject and keeps unsupported fragments out',()=>{
+ const text='Course Title: Operating Systems\nCourse Contents\nTatroduction {0 Operating Systems, UNIX: System Calls\nIntroduction to Operating Systems: System structure\n- CPU\n- I/O\n- Fragment (3 unrelated text\nSuggested Books\n- A book';
+ const topics=parseSyllabus([{number:1,text,method:'ocr'}]);
+ expect(topics.map(item=>item.title)).toEqual(['Introduction to Operating Systems','UNIX','System Calls','System structure','CPU','I/O']);
+ expect(topics.find(item=>item.title==='System structure')?.group).toBe('Introduction to Operating Systems');
+ expect(topics[0].excerpt).toContain('Tatroduction {0 Operating Systems');
+});
+
+it('repairs syllabus vocabulary when the full OCR heading closely matches a known term',()=>{
+ const source='Course Title: Operating Systems\nCourse Outline\n- Operating System Servis\n- Muliple-Processor scheduling\n- Thread scheduling. wo\n- I/O';
+ expect(parseSyllabus([{number:1,method:'ocr',text:source}]).map(topic=>topic.title)).toEqual([
+  'Operating System Services','Multiple-Processor Scheduling','Thread Scheduling','I/O',
+ ]);
+});

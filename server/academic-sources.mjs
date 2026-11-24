@@ -11,6 +11,7 @@ const institutions=[
  ['IIT Delhi','iitd.ac.in',/\b(?:iit\s*delhi|indian institute of technology delhi)\b/i],
  ['Anna University','annauniv.edu',/\banna university\b/i],
  ['MIT','mit.edu',/\b(?:massachusetts institute of technology|mit)\b/i],
+ ['University of Illinois Chicago','uic.edu',/\b(?:university of illinois chicago|uic)\b/i],
  ['Stanford University','stanford.edu',/\bstanford(?: university)?\b/i],
  ['University of Cambridge','cam.ac.uk',/\b(?:university of cambridge|cambridge university)\b/i]
 ];
@@ -78,6 +79,14 @@ export function academicResult(result,policy){
       }).slice(0,12):[];
   if(publishesPaper&&!questions.length)return null;
   const syllabus=/syllabus|course contents|curriculum|course outline/i.test(title+' '+snippet+' '+raw.slice(0,1800));
+ if(policy.conceptual){
+  // A title or a list of syllabus topics alone is not an explanatory passage.
+  const concepts=publicStudyConcepts(policy.topic??'');
+  const passageMatches=topicTerms.length&&topicTerms.every(word=>matches([word],snippet))||
+   concepts.some(concept=>publicStudyConcepts(snippet).includes(concept));
+  const explains=/\b(?:is|are|was|were|allows?|ensures?|prevents?|requires?|refers? to|occurs? when|can|must|consists? of|controls?)\b/i.test(snippet);
+  if(!explains||topicTerms.length&&!passageMatches)return null;
+ }
   const category=questions.length?'official-pyq':verifiedInstitution&&syllabus&&(!policy.scope.code||codeMatches)?'official-syllabus':'academic-reference';
   const scopeOutline=syllabus&&category!=='official-pyq'
    ?parseSyllabus([{number:1,text:'Course Contents\n'+(raw||snippet)}],subject).map(({title,group,excerpt})=>({title,group,excerpt}))
@@ -198,5 +207,5 @@ export async function conceptualReferences(subject,topic){
  const passages=[...new Set([...essential,...ranked.map(item=>item.text)].filter(text=>text.length<=580))].slice(0,4);
  if(!passages.length)return [];
  return [{kind:'web',url:synchronizationUrl,title:synchronizationPage.title,publisher:'University of Illinois Chicago',
-  category:'academic-reference',status:'page-inspected',role:'conceptual',excerpt:passages.join('\n\n')}];
+  category:'academic-reference',status:'page-inspected',role:'conceptual',retrievedBy:'direct',excerpt:passages.join('\n\n')}];
 }

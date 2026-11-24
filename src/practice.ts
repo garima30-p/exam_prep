@@ -1,15 +1,17 @@
 import {useEffect,useRef,useState} from 'react';
 import type {Source} from './api';
 import type {BookPage} from './study-book';
+import {publicStudyConcepts} from '../server/coach-topics.mjs';
 
 export type WebEvidence={kind:'web';id:string;title:string;url:string;publisher?:string;category?:'official-syllabus'|'official-pyq'|'academic-reference';
-  excerpt?:string;supportingQuote?:string;supportingQuotes?:string[];status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[];scopeOutline?:{title:string;group:string;excerpt:string}[]};
+  excerpt?:string;retrievedBy?:'tavily'|'direct';supportingQuote?:string;supportingQuotes?:string[];status?:'page-inspected'|'provider-page-text'|'provider-excerpt';questions?:string[];scopeTopics?:string[];scopeOutline?:{title:string;group:string;excerpt:string}[]};
 export type LearningSource=(Source & {kind:'uploaded';id:string;supportingQuotes?:string[]})|WebEvidence;
 export type AnswerVerification={
   evidenceStatus?:'source_backed'|'partially_source_backed'|'no_supporting_source';
   validationStatus?:'deterministically_checked'|'reviewed_against_references'|'not_independently_checked'|'check_failed';
   validationMethod?:string;
   checkedMetrics?:string[];
+  webSearch?:{code:string;attempted?:boolean;cached?:boolean;providerStatus?:number|null;providerResultCount?:number|null;quota?:{blockedBy?:string[]}};
 };
 export type AcademicResult={sources:WebEvidence[];scope:{requested:boolean;institution?:string;officialSyllabus:boolean;officialPyq:boolean};
   officialSearch?:{code:string;providerStatus?:number|null;cached?:boolean;attempted?:boolean}|null;webSearch?:{code:string}|null};
@@ -27,25 +29,35 @@ export function historicalQuestions(topic:PracticeTopic):PracticeItem[]{
   }));
   const root=keyText(topic.page.title)===keyText(topic.subject);
   const terms=keyText(topic.page.title).split(' ').filter(word=>word.length>3);
+  const concepts=publicStudyConcepts(topic.page.title+' '+topic.page.title.toLowerCase().replace(/s$/,''));
+  const matchesPage=(prompt:string,key:string)=>{
+    const tested=publicStudyConcepts(prompt);
+    if(root)return tested.length===0&&terms.length>0&&terms.every(word=>key.includes(word));
+    return concepts.some(concept=>tested.includes(concept))||
+      (terms.length>0&&terms.every(word=>key.includes(word.replace(/s$/,''))));
+  };
   const seen=new Set(uploaded.map(item=>keyText(item.prompt)));
   const official=topic.official.filter(source=>source.category==='official-pyq').flatMap(source=>(source.questions??[]).flatMap(prompt=>{
     const key=keyText(prompt);
-    if(seen.has(key)||(!root&&!terms.some(word=>key.includes(word))))return [];
+    if(seen.has(key)||!matchesPage(prompt,key))return [];
     seen.add(key);return [{id:'official-'+JSON.stringify([source.url,key]),prompt,officialSource:source}];
   }));
   return [...official,...uploaded];
 }
 
+type PracticeView={exampleOpen?:boolean;pyqOnly?:boolean;format?:string;count?:number;hintOpen?:boolean;hintNumber?:number;answerOpen?:boolean};
+
 export function usePractice(){
   const [batches,setBatches]=useState<Record<string,Batch>>({});
   const [details,setDetails]=useState<Record<string,Detail>>({});
+  const [views,setViews]=useState<Record<string,PracticeView>>({});
   const requests=useRef(new Map<string,AbortController>());
   useEffect(()=>()=>requests.current.forEach(operation=>operation.abort()),[]);
 
   function reset(){
     requests.current.forEach(operation=>operation.abort());
     requests.current.clear();
-    setBatches({});setDetails({});
+    setBatches({});setDetails({});setViews({});
   }
 
   async function add(topic:PracticeTopic,count=6,format='',initial=false){
@@ -110,5 +122,6 @@ export function usePractice(){
       if(!operation.signal.aborted)setDetails(current=>({...current,[key]:{error:error instanceof Error&&error.name==='Error'?error.message:'This explanation could not load. Try again.'}}));
     }finally{if(requests.current.get(key)===operation)requests.current.delete(key);}
   }
-  return {batches,details,add,load,detailKey,reset};
+  const updateView=(key:string,patch:PracticeView)=>setViews(current=>({...current,[key]:{...current[key],...patch}}));
+  return {batches,details,views,updateView,add,load,detailKey,reset};
 }

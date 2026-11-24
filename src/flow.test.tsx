@@ -67,7 +67,7 @@ it('teaches a recognized exam subject immediately and caches each learning depth
       button('Next topic →').click();
     });
     await act(async()=>button('Next topic →').click());
-    expect([...host.querySelectorAll('.learning-notes h2')].map(h=>h.textContent)).toEqual(['Operating Systems','Process Management']);
+    expect([...host.querySelectorAll('.learning-notes h2')].map(h=>h.textContent)).toEqual(['Process Management']);
     await act(async()=>button('Study').click());
     expect(host.querySelector('.book-page-number')?.textContent).toContain('Page 2');
     expect(requests.find(request=>request.learningMode==='study')).toMatchObject({topic:'Process Management'});
@@ -77,7 +77,7 @@ it('teaches a recognized exam subject immediately and caches each learning depth
     expect(requests.filter(request=>request.task==='notes')).toHaveLength(3);
     expect(requests.filter(request=>request.task==='academic')).toHaveLength(1);
     expect(requests.filter(request=>request.task==='practiceBatch')).toHaveLength(1);
-    expect(requests.filter(request=>request.task==='example')).toHaveLength(1);
+    expect(requests.filter(request=>request.task==='example')).toHaveLength(0);
     expect(analyze).toHaveBeenCalledTimes(1);
   }finally{
     await act(async()=>root.unmount());
@@ -101,5 +101,31 @@ it('does not use ranked question fragments as navigation titles even without a s
  const historical={...fixture[11],topic:'Command',prompt:'Describe command processing in operating systems.',historical:true};
  const [root,...extra]=bookOutline({questions:[historical],warnings:[]},'Operating Systems','',[]);
  expect(extra).toEqual([]);
- expect(root.questions).toEqual([historical]);
+ expect(root.questions).toEqual([]);
+ expect(root.unassignedQuestions).toEqual([historical]);
+});
+
+it('assigns historical questions to academic topics and keeps uncertain questions available in sources',()=>{
+ const prompts=[
+  'What is the critical section problem and why does mutual exclusion matter?',
+  'Compare FCFS and other CPU scheduling algorithms.',
+  'What are system calls? Describe their types.',
+  'Explain the necessary conditions for deadlocks.',
+  'Identify the commands needed to adjust the terminal.',
+ ];
+ const questions=prompts.map((prompt,index)=>({...fixture[0],id:index,topic:'Operating Systems',prompt,historical:true}));
+ const pages=bookOutline({questions,warnings:[]},'Operating Systems','',[],[
+  {title:'Introduction to Operating Systems',group:''},
+  {title:'System Calls',group:'Introduction to Operating Systems'},
+  {title:'Process Synchronization',group:''},
+  {title:'CPU Scheduling',group:''},
+  {title:'Deadlocks',group:''},
+ ]);
+ const assigned=(title:string)=>pages.find(page=>page.title===title)?.questions.map(question=>question.id);
+ expect(assigned('Introduction to Operating Systems')).toEqual([]);
+ expect(assigned('System Calls')).toEqual([2]);
+ expect(assigned('Process Synchronization')).toEqual([0]);
+ expect(assigned('CPU Scheduling')).toEqual([1]);
+ expect(assigned('Deadlocks')).toEqual([3]);
+ expect(pages[0].unassignedQuestions?.map(question=>question.id)).toEqual([4]);
 });
