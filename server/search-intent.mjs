@@ -6,9 +6,21 @@ const papers=/\b(?:pyqs?|(?:previous|past|prior|old)[ -]?(?:years?[ -]?)?(?:exam
 const curriculum=/\b(?:syllabus|curriculum|course outline|course catalog)\b/i;
 const references=/\b(?:(?:academic|official|external|credible|additional|scholarly|web|online|university) (?:study )?(?:sources?|references?|material(?:s)?)|references?|sources? online)\b/i;
 
+export function webSourceQuestion(text){
+ if(typeof text!=='string')return '';
+ const web=/\b(?:web|internet|online|external)\b/i.test(text);
+ if(!web)return '';
+ if(/\b(?:sources|references|websites|links)\b.{0,35}\b(?:supported|used|cited)\b/i.test(text)&&/\b(?:this|that|previous|last) (?:answer|reply|response)\b/i.test(text))return 'previous';
+ if(/^(?:\s*)(?:did (?:you|this answer)|(?:which|what)(?:\s+\w+){0,5}\s+(?:sources|references|websites|links)\b|where did you)\b/i.test(text))return 'previous';
+ if(/^\s*(?:(?:do|can|could|are) you|does in-nocent|is web)/i.test(text)&&
+  /\b(?:use|support|access|retrieve|search|browse|available|enabled|academic)\b/i.test(text)&&
+  !/\b(?:look up|find|consult|to (?:explain|compare|solve|answer|find)|about|for (?!academic research\b))\b/i.test(text))return 'capability';
+ return '';
+}
+
 export function academicSearchIntent(text){
- if(typeof text!=='string'||!text||/^\s*(?:can|could|do) you (?:search|browse) (?:on )?(?:the )?(?:web|internet)(?:\s*[?.!]\s*)?$/i.test(text))return '';
- if(!find.test(text)&&!(references.test(text)&&/\b(?:give|show|list|provide|send)\b/i.test(text)))return '';
+ if(typeof text!=='string'||!text||webSourceQuestion(text)||/^\s*(?:can|could|do) you (?:search|browse) (?:on )?(?:the )?(?:web|internet)(?:\s*[?.!]\s*)?$/i.test(text))return '';
+ if(!find.test(text)&&!(/\b(?:use|consult|check|research)\b/i.test(text)&&/\b(?:web|online|external|internet)\b/i.test(text))&&!(references.test(text)&&/\b(?:give|show|list|provide|send)\b/i.test(text)))return '';
  if(papers.test(text))return 'papers';
  if(curriculum.test(text))return 'syllabus';
  if(/\b(?:university|college|institute)(?:[?.!]|\s|$)/i.test(text)&&!references.test(text)&&!/\b(?:online|web|internet)\b/i.test(text))return 'institution';

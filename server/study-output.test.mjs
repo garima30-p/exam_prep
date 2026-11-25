@@ -373,36 +373,35 @@ it('keeps safe maxima for invalid or oversized quota configuration',async()=>{
 });
 
 it.each([['guest_daily'],['global_daily'],['guest_daily','global_daily']].map(blockedBy=>[blockedBy]))(
- 'skips Tavily on %j and returns a general Gemma answer',async(blockedBy)=>{
+ 'skips Tavily on %j and reports the search quota',async(blockedBy)=>{
   const {env,run}=setup();
   const resetAt='2026-11-23T00:00:00.000Z';
   env.TAVILY_API_KEY='test-secret';
   env.STUDY_BUDGET.get=()=>({fetch:async()=>Response.json({allowed:false,blockedBy,resetAt,guest:{used:3,max:3},global:{used:10,max:10}})});
-  run.mockResolvedValueOnce({response:'Deadlock is a circular wait for resources.'});
   const search=vi.fn();
   vi.stubGlobal('fetch',search);
   try{
    const result=await handle(post('coach',{task:'notes',mode:'web',request:'Explain deadlock.',publicTopic:'operating systems deadlock'}),env);
-   expect(result.status).toBe(200);
-   expect(await result.json()).toMatchObject({explanation:'Deadlock is a circular wait for resources.',sources:[],sourceVerified:false,
+   expect(result.status).toBe(429);
+   expect(await result.json()).toMatchObject({code:'web_usage_limit',
     webSearch:{code:'web_usage_limit',providerStatus:null,quota:{blockedBy,resetAt}}});
    expect(search).not.toHaveBeenCalled();
-   expect(run).toHaveBeenCalledOnce();
+   expect(run).not.toHaveBeenCalled();
   }finally{vi.unstubAllGlobals();}
  });
 
 it.each([[429,'web_provider_rate_limit'],[432,'web_provider_credit_limit'],[433,'web_provider_spending_limit']])(
- 'distinguishes provider response %i from local quotas and falls back to Gemma',async(providerStatus,code)=>{
+ 'distinguishes provider response %i from local quotas without substituting a general answer',async(providerStatus,code)=>{
   const {env,run}=setup();
   env.TAVILY_API_KEY='test-secret';
-  run.mockResolvedValueOnce({response:'Deadlock is a circular wait for resources.'});
   const search=vi.fn(async()=>new Response('Provider response',{status:providerStatus}));
   vi.stubGlobal('fetch',search);
   try{
    const result=await handle(post('coach',{task:'notes',mode:'web',request:'Explain deadlock.',publicTopic:'operating systems deadlock'}),env);
-   expect(result.status).toBe(200);
-   expect(await result.json()).toMatchObject({sources:[],sourceVerified:false,webSearch:{code,providerStatus}});
+   expect(result.status).toBe(429);
+   expect(await result.json()).toMatchObject({code,webSearch:{code,providerStatus}});
    expect(search).toHaveBeenCalledOnce();
+   expect(run).not.toHaveBeenCalled();
   }finally{vi.unstubAllGlobals();}
  });
 

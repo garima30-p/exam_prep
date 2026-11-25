@@ -62,3 +62,20 @@ it('checks a worked example from its stated inputs and rejects unsupported assum
  expect(await response.json()).toMatchObject({code:'calculation_check_failed'});
  expect(checkNumericalAnswer(scheduling+' with a context-switch overhead of 2 ms',correct)).toMatchObject({validationStatus:'not_independently_checked'});
 });
+
+it('calculates both scenario totals and verifies the required percentage independently',async()=>{
+ const question='Scenario A:\n10,000 operations × 5 ns\nScenario B:\n10,000 operations × 30 ns\nFind both total times and the percentage increase.';
+ const run=vi.fn();
+ const request=new Request('https://example.com/api/coach',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({task:'answer',mode:'auto',request:question})});
+ const response=await handle(request,{STUDY_AI_ENABLED:'true',AI:{run}});
+ const result=await response.json();
+ expect(result.explanation).toContain('Scenario A total: 50,000 ns');
+ expect(result.explanation).toContain('Scenario B total: 300,000 ns');
+ expect(result.explanation).toContain('Percentage increase: 500%');
+ expect(result.validationStatus).toBe('deterministically_checked');
+ expect(checkNumericalAnswer(question,result.explanation).validationStatus).toBe('deterministically_checked');
+ expect(checkNumericalAnswer(question,result.explanation.replace('500%','600%'))).toMatchObject({validationStatus:'check_failed',failedMetric:'Percentage increase'});
+ expect(checkNumericalAnswer(question,result.explanation.replace('Percentage increase: 500%','Six times as long'))).toMatchObject({validationStatus:'check_failed',missingMetric:'Percentage increase'});
+ expect(run).not.toHaveBeenCalled();
+});

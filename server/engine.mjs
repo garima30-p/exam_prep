@@ -1,4 +1,4 @@
-import {academicSearchIntent} from './search-intent.mjs';
+import {academicSearchIntent,webSourceQuestion} from './search-intent.mjs';
 import { now, elapsed, serverTiming } from './performance.mjs';
 import { aiErrors, aiStatus, coachEnabled, diagnoseGemma, diagnoseSearchQuota, diagnoseTavily, generateStudyReply, webSearchStatus } from './study-ai.mjs';
 import { administrativeLine, parseSyllabus, syllabusAdministrative, syllabusUnit } from './study-material.mjs';
@@ -282,7 +282,7 @@ export async function handle(request,env) {
     if(path==='/api/coach'){
       if(!input||typeof input!=='object')return json({error:'Invalid AI request.',code:'invalid_request'},400);
       const search=input.task==='search'||['chat','coach'].includes(input.task)&&!['notes','web'].includes(input.mode)&&academicSearchIntent(input.request);
-      if(!search&&!coachEnabled(env))return json({error:aiErrors[aiStatus(env)],code:aiStatus(env)},503);
+      if(!search&&!webSourceQuestion(input.request)&&!coachEnabled(env))return json({error:aiErrors[aiStatus(env)],code:aiStatus(env)},503);
       try{return finish(await generateStudyReply(input,env,request,metrics));}
       catch{return json({error:aiErrors.request_failed,code:'request_failed'},502);}
     }

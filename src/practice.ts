@@ -9,6 +9,7 @@ export type WebEvidence={kind:'web';id:string;title:string;url:string;publisher?
 export type LearningSource=(Source & {kind:'uploaded';id:string;supportingQuotes?:string[]})|WebEvidence;
 export type AnswerVerification={
   searchResult?:boolean;
+  retrievalDiagnostics?:{providerAttempted?:boolean;supportingWebIds?:string[]};
   evidenceStatus?:'source_backed'|'partially_source_backed'|'no_supporting_source';
   validationStatus?:'deterministically_checked'|'reviewed_against_references'|'not_independently_checked'|'check_failed';
   validationMethod?:string;

@@ -28,8 +28,35 @@ function bankerCalculation(text){
  return {method:'Banker’s safety algorithm',safe:remaining.size===0,allocation,maximum,available,sequence};
 }
 
+const timeScales={ns:1,us:1000,'μs':1000,'µs':1000,ms:1000000,s:1000000000};
+const amount=token=>Number(token.replaceAll(',',''));
+export function scenarioCalculation(text){
+ if(!/\b(?:percent(?:age)? increase|increase (?:in percent|as a percentage))\b/i.test(text))return null;
+ const sections=[...text.matchAll(/\bScenario\s+([AB])\s*[:–—-]\s*([^\n]+)/gi)];
+ if(sections.length!==2||sections[0][1].toUpperCase()!=='A'||sections[1][1].toUpperCase()!=='B')return null;
+ const shared=text.slice(0,sections[0].index).match(/\b([\d,]+)\s+operations?\b/i)?.[1];
+ const scenarios=sections.map(([,label,line])=>{
+  const operands=line.split('=')[0];
+  const count=operands.match(/\b([\d,]+)\s+operations?\b/i)?.[1]??shared;
+  const timings=[...operands.matchAll(/(?:^|[^\w.])(\d+(?:\.\d+)?)\s*(ns|us|μs|µs|ms|s)\b/gi)];
+  if(!count||timings.length!==1)return null;
+  const operations=amount(count),perOperation=Number(timings[0][1]),unit=timings[0][2].toLowerCase();
+  const total=operations*perOperation*timeScales[unit];
+  return Number.isSafeInteger(operations)&&operations>0&&Number.isFinite(total)&&total>0?{label:label.toUpperCase(),operations,perOperation,unit,total}:null;
+ });
+ if(scenarios.some(item=>!item)||scenarios[1].total<scenarios[0].total)return null;
+ const [a,b]=scenarios;
+ const increase=(b.total-a.total)/a.total*100;
+ if(!Number.isFinite(increase))return null;
+ return {method:'Operation counts and percentage change',scenarios,metrics:[
+  metric('Scenario A total',a.total),metric('Scenario B total',b.total),metric('Percentage increase',increase),
+ ]};
+}
+
 export function supportedCalculation(question) {
  const text=question.replace(/\r/g,'');
+ const scenario=scenarioCalculation(text);
+ if(scenario)return scenario;
  const banker=bankerCalculation(text);
  if(banker)return banker;
  // Require an explicit input format and an unambiguous algorithm; never extract data from the answer.
@@ -78,6 +105,14 @@ export function supportedCalculation(question) {
 
 export function renderCheckedCalculation(calculation,question){
  if(!calculation)return null;
+ if(calculation.scenarios){
+  const [a,b]=calculation.scenarios;
+  const format=value=>Number(value.toPrecision(12)).toLocaleString('en-US',{maximumFractionDigits:12});
+  const totals=calculation.scenarios.map(row=>'Scenario '+row.label+' total: '+format(row.total)+' ns ('+
+    format(row.operations)+' × '+format(row.perOperation)+' '+row.unit+')');
+  const explanation=[...totals,'Percentage increase: '+format(calculation.metrics[2].value)+'%','(('+format(b.total)+' − '+format(a.total)+') ÷ '+format(a.total)+') × 100'].join('\n\n');
+  return {explanation,validationMethod:calculation.method,checkedMetrics:calculation.metrics.map(item=>item.label)};
+ }
  if(typeof calculation.safe==='boolean'){
   if(!/\b(?:safety|safe state|safe sequence|unsafe)\b/i.test(question))return null;
   const sequence=calculation.sequence.map(index=>'P'+index).join(' → ');
@@ -101,6 +136,21 @@ export function renderCheckedCalculation(calculation,question){
 export function checkNumericalAnswer(question,answer,calculation=supportedCalculation(question)){
  if(!calculation)return {validationStatus:'not_independently_checked'};
  const normalized=answer.replace(/[*_\x60]/g,'');
+ if(calculation.scenarios){
+  const checkedMetrics=[];
+  for(const {label,value} of calculation.metrics){
+   const unit=label==='Percentage increase'?'%':'(?:ns|us|μs|µs|ms|s)\\b';
+   const line=new RegExp('\\b'+label+'\\s*[:=]\\s*([+-]?[\\d,.]+)\\s*('+unit+')','gi');
+   const claims=[...normalized.matchAll(line)];
+   if(!claims.length)return {validationStatus:'check_failed',validationMethod:calculation.method,missingMetric:label};
+   if(claims.some(([,number,unit])=>{
+    const actual=amount(number)*(timeScales[unit.toLowerCase()]??1);
+    return !Number.isFinite(actual)||Math.abs(actual-value)>Math.max(Math.abs(value)*1e-9,label==='Percentage increase'?.005:1e-9);
+   }))return {validationStatus:'check_failed',validationMethod:calculation.method,failedMetric:label};
+   checkedMetrics.push(label);
+  }
+  return {validationStatus:'deterministically_checked',validationMethod:calculation.method,checkedMetrics};
+ }
  if(typeof calculation.safe==='boolean'){
   const claimed=normalized.match(/\bsafety\s*:\s*(safe|unsafe)\b/i)?.[1]?.toLowerCase();
   if(!claimed)return {validationStatus:'not_independently_checked'};

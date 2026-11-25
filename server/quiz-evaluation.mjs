@@ -38,7 +38,7 @@ export function recallFact(statement){
 
 export function verifiedAnswer(question){
  const calculation=supportedCalculation(question);
- if(!calculation)return null;
+ if(!calculation||calculation.scenarios)return null;
  const solution=renderCheckedCalculation(calculation,question);
  if(!solution||(calculation.safe!==undefined&&/\b(?:need matrix|available vector)\b/i.test(question)))return null;
  // The scalar evaluator can establish only the supported, explicitly requested metrics.

@@ -1,4 +1,5 @@
-import {academicSearchIntent} from '../server/search-intent.mjs';
+import {scenarioCalculation} from '../server/answer-verification.mjs';
+import {academicSearchIntent,webSourceQuestion} from '../server/search-intent.mjs';
 import type {AnswerVerification} from './practice';
 import {academicOutline} from '../server/academic-sources.mjs';
 import type {TopicOutline} from './study-book';
@@ -45,7 +46,7 @@ type CoachRequest = {request:string;task:string;mode:'auto';topic?:string;subjec
   university?:string;academicGrounding?:boolean;
   history:{role:'user'|'assistant';content:string}[];sources:Source[];minutes:number};
 type Message = {role:'You'|'in-nocent';text:string;references?:CoachSource[];inline?:boolean;
-  generated?:boolean;verification?:AnswerVerification;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest;offer?:{topic:PracticeTopic;count:number;format:string}};
+  sourceFollowUp?:boolean;generated?:boolean;verification?:AnswerVerification;pending?:boolean;status?:boolean;error?:string;retry?:CoachRequest;offer?:{topic:PracticeTopic;count:number;format:string}};
 
 // Keep the complete question and newest context within the Worker's byte limit.
 function coachRequestBody(request:CoachRequest) {
@@ -760,11 +761,36 @@ export function App({api=demoApi}:{api?:ExamApi}) {
     const offer=channel==='coach'&&more&&fitsTopic&&mode==='study'&&activePractice?{topic:activePractice,count:Math.min(10,Math.max(1,Number(more[1]))),
       format:specificFormat?requestedFormat:''}:undefined;
     const inline=channel==='main';
-    const message:Message={role:'in-nocent',inline,text:offer?'I can add these to '+offer.topic.page.title+'.':'',pending:!offer,offer};
+    const message:Message={sourceFollowUp:Boolean(webSourceQuestion(text)),role:'in-nocent',inline,text:offer?'I can add these to '+offer.topic.page.title+'.':'',pending:!offer,offer};
     if(inline){setDraft('');setNotice('');}
     else {coachAtBottom.current=true;setCoachDraft('');}
     setMessages(current=>[...current,{role:'You',text,inline},message]);
     if(offer)return;
+    if(webSourceQuestion(text)==='previous'){
+      const previous=[...messages].reverse().find(item=>Boolean(item.inline)===inline&&item.role==='in-nocent'&&
+        !item.sourceFollowUp&&!item.offer&&!item.pending&&!item.error);
+      const prior=/\b(?:this|current|these) (?:lesson|notes)\b/i.test(text)?activeBookContent:previous??activeBookContent;
+      const verification=prior?.verification;
+      const references=prior?.references??[];
+      const web=references.filter(reference=>reference.kind==='web');
+      const ids=verification?.retrievalDiagnostics?.supportingWebIds;
+      const supporting=ids?web.filter(reference=>ids.includes(reference.id)):web;
+      const listed=verification?.searchResult&&!supporting.length?web:[];
+      const explanation=supporting.length?'These web sources supported that answer.':
+        listed.length?'These web results were listed in the previous search.':
+        !prior?'There isn’t a previous answer to check yet.':
+        verification?.webSearch?.cached?'That answer cited no web sources. The app checked cached search results.':
+        verification?.retrievalDiagnostics?.providerAttempted||verification?.webSearch?.attempted?
+          'The app tried web search for that answer. No web sources supported the reply.':
+          'That answer did not use web sources.';
+      setMessages(current=>current.map(item=>item===message?{...item,pending:false,generated:false,sourceFollowUp:true,
+        text:explanation,references:supporting.length?supporting:listed,verification:{searchResult:true}}:item));
+      return;
+    }
+    if(webSourceQuestion(text)==='capability'){
+      void askAssistant(message,{request:text,task:'chat',mode:'auto',subject:'',topics:[],preparationMode:mode,history:[],sources:[],minutes:0});
+      return;
+    }
     const requestedSearch=searchPrompt(text,channel);
     if(requestedSearch){
       const uploadedPapers=(book?.pages.flatMap(page=>page.questions)??[])
@@ -776,6 +802,10 @@ export function App({api=demoApi}:{api?:ExamApi}) {
       return;
     }
 
+    if(scenarioCalculation(text)){
+      void askAssistant(message,{request:text,task:'chat',mode:'auto',subject:'',topics:[],preparationMode:mode,history:[],sources:[],minutes:0});
+      return;
+    }
     const conversation=messages.filter(item=>Boolean(item.inline)===inline);
     const subject=book?.subject||context.subject||learningSubject(text);
     const topics=[...new Set((book?.pages.map(page=>page.title)??(result??[]).map(question=>question.topic)))].slice(0,20);
@@ -853,6 +883,7 @@ export function App({api=demoApi}:{api?:ExamApi}) {
   function submitMessage(){
     if(controller.current||activeAssistantRequest.current)return;
     const text=draft.trim();
+    if((webSourceQuestion(text)||scenarioCalculation(text))&&!newAttachments){send(text);return;}
     if(searchPrompt(text,'main')){
       if(newAttachments)void searchWithAttachments(text);
       else send(text);

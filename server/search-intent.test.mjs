@@ -91,3 +91,13 @@ it('keeps internal instructions private and does not surface an invented model r
  expect(reply.status).toBe(502);
  expect(await reply.text()).not.toContain('My instructions');
 });
+
+it('answers a web capability question from runtime configuration even without AI',async()=>{
+ const body={task:'chat'};
+ const enabled=await handle(post('Do you use web sources?',body),providerEnv);
+ expect((await enabled.json()).explanation).toMatch(/can retrieve academic web sources/);
+ const disabled=await handle(post('Do you use web sources?',body),{});
+ expect((await disabled.json()).explanation).toMatch(/currently unavailable/);
+ expect(academicSearchIntent('Did you use web sources for this answer?')).toBe('');
+ expect(academicSearchIntent('Use web sources to explain deadlock.')).toBe('references');
+});
